@@ -1,0 +1,34 @@
+services:
+  api:
+    build:
+      context: ./api
+    environment:
+      APP_LDAP_URL: "ldap://openldap:389"
+      APP.LDAP.USER_DN_PATTERN: "uid={0},ou=people,dc=balamb-garden,dc=edu"
+      APP.LDAP.GROUP_SEARCH_BASE: "ou=groups,dc=balamb-garden,dc=edu"
+      APP.LDAP.GROUP_SEARCH_FILTER: "member={0}"
+      APP.LDAP.ADMIN_DN: "cn=admin,dc=balamb-garden,dc=edu"
+      APP.LDAP.ADMIN_PASSWORD: "But_the_Owls_are_still_around"
+      APP.JWT.SECRET: "random-string-of-32-characters-or-more-1234567890abcdef"
+      APP.JWT.ISSUER: "http://localhost:8080"
+      APP.JWT.TTL: "15m"
+      APP.CORS.ALLOW_ORIGINS: "*"
+    extra_hosts:
+      - "localhost:host-gateway"
+    ports:
+      - "8080:8080"
+
+  openldap:
+    image: osixia/openldap
+    command: ["--copy-service", "--loglevel", "debug"]
+    ports:
+      - "389:389"
+      - "636:636"
+    environment:
+      LDAP_ORGANISATION: "Balamb Garden"
+      LDAP_DOMAIN: "balamb-garden.edu"
+      LDAP_BASE_DN: "dc=balamb-garden,dc=edu"
+      LDAP_ADMIN_PASSWORD: "But_the_Owls_are_still_around"
+      LDAP_TLS: "false"
+    volumes:
+      - ./openldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif
