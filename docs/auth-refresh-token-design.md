@@ -170,7 +170,7 @@ PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamil
 | `revoked_at` | `TIMESTAMPTZ` | token単体の失効時刻。未失効ならNULL |
 | `replaced_by_id` | `VARCHAR(36)` | rotation後のtoken record ID。未更新ならNULL |
 
-必要なindexはtoken hashのunique index、tokenの `family_id`、familyの `username` と `absolute_expires_at`。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
+必要なindexはtoken hashのunique index、tokenの `family_id` と自己参照FK列 `replaced_by_id`、familyの `username` と `absolute_expires_at`。`replaced_by_id` のindexは、自己参照FKの `ON DELETE SET NULL` が参照元recordを検索する際の全件走査を避けるために設ける。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
 
 ### 6.1 PostgreSQL DDL
 
@@ -221,6 +221,9 @@ CREATE TABLE IF NOT EXISTS refresh_token (
 
 CREATE INDEX IF NOT EXISTS idx_refresh_token_family_id
   ON refresh_token (family_id);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_token_replaced_by_id
+  ON refresh_token (replaced_by_id);
 
 COMMENT ON TABLE refresh_token IS 'Hashed refresh token history for rotation and reuse detection';
 COMMENT ON COLUMN refresh_token.id IS 'UUID identifying this refresh token record';
