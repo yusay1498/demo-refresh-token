@@ -144,33 +144,54 @@ Request bodyのRefresh tokenが属するfamilyを失効させる。正常・既�
 
 ## 6. Refresh tokenデータ設計
 
-PostgreSQLにtoken単位の履歴を保持する。LDAPユーザーは外部管理のため、ユーザーテーブルへの外部キーは設けない。
+PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamily親レコードを保持する。LDAPユーザーは外部管理のため、ユーザーテーブルへの外部キーは設けない。
+
+#### `refresh_token_family`（family親レコード）
+
+| カラム | 型案 | 制約・用途 |
+|---|---|---|
+| `id` | `VARCHAR(36)` | PK、family ID |
+| `username` | `VARCHAR(255)` | LDAP subject。logout-allの検索対象 |
+| `created_at` | `TIMESTAMPTZ` | family作成時刻 |
+| `absolute_expires_at` | `TIMESTAMPTZ` | familyの絶対期限 |
+| `revoked_at` | `TIMESTAMPTZ` | family失効時刻。未失効ならNULL |
+
+この親レコードはtoken rotation後も削除・置換せず、familyの排他制御に使う。各token recordの `family_id` は親レコードを参照する外部キーとする。Signinで新しいfamilyを作る場合も、同じユーザー単位の排他制御に従う。
 
 | カラム | 型案 | 制約・用途 |
 |---|---|---|
 | `id` | `VARCHAR(36)` | PK、UUID文字列 |
-| `family_id` | `VARCHAR(36)` | 同一ログインセッションを識別。index対象 |
+| `family_id` | `VARCHAR(36)` | `refresh_token_family.id` へのFK。index対象 |
 | `username` | `VARCHAR(255)` | LDAP subject。logout-allの検索対象 |
 | `token_hash` | `CHAR(64)` | SHA-256 hex。NOT NULL、UNIQUE |
 | `issued_at` | `TIMESTAMPTZ` | 発行時刻 |
 | `expires_at` | `TIMESTAMPTZ` | idle timeoutを反映した期限 |
-| `absolute_expires_at` | `TIMESTAMPTZ` | familyの絶対期限 |
 | `consumed_at` | `TIMESTAMPTZ` | rotationで使用済みになった時刻。未使用ならNULL |
-| `revoked_at` | `TIMESTAMPTZ` | logout/再利用検知で失効した時刻。未失効ならNULL |
+| `revoked_at` | `TIMESTAMPTZ` | token単体の失効時刻。未失効ならNULL |
 | `replaced_by_id` | `VARCHAR(36)` | rotation後のtoken record ID。未更新ならNULL |
 | `created_at` | `TIMESTAMPTZ` | レコード作成時刻 |
 
 必要なindexはtoken hashのunique index、`family_id`、`username`。有効状態は未消費・未失効・期限内で判定する。消費済みrecordは再利用検知に必要な期間保持し、familyの絶対期限を過ぎたrecordのcleanup方針を運用要件として定める。
 
-### 6.1 Rotationの排他性
+### 6.1 Family単位の排他性
 
-1. `token_hash` で対象recordを取得し、トランザクション内で行ロックする。
-2. 未消費・未失効・期限内であることを確認する。
-3. LDAPからユーザー状態と最新authoritiesを取得する。
-4. 旧recordをconsumedにし、新しいtoken hashのrecordを同じfamilyに追加する。
-5. commit後にのみ新しいAccess/Refresh tokenを返す。
+token行だけのロックでは、family失効UPDATEが実行時点でまだ存在しない後継recordを対象にできない。特にPostgreSQLのREAD COMMITTEDでは、失効UPDATEがRefresh transactionを待った後も、そのUPDATE開始時のsnapshotに含まれなかった後継recordを取りこぼす可能性がある。このため、token行ロックだけではRefreshによる後継record追加とfamily全体の失効を直列化できない。
 
-既にconsumedのrecordが再度提示された場合はreuseと判断し、同familyの全recordを失効する。DBのtransaction isolation/row lockを使い、同じtokenを二重に正常更新できないようにする。フロントエンドのタブ間排他は誤検知を防ぐため必須とする。
+Refresh、使用済みtokenの再利用検知、単一logout、logout-allは、共通の安定したfamily親レコードを排他ロックし、family内のtoken状態変更と親レコードの失効をそのトランザクション内で行う。ロックは後継record追加またはfamily失効のcommitまで保持する。
+
+Refresh/reuse/logoutの手順:
+
+1. `token_hash` から対象tokenの `family_id` をロックなしで特定する。この検索結果はfamilyの特定だけに使い、tokenの有効性判定には使わない。
+2. トランザクションを開始し、対応する `refresh_token_family` 親レコードを `SELECT ... FOR UPDATE` でロックする。
+3. ロック取得後に親レコードと対象token recordを再読込し、失効・消費・期限を検証する。ここでの読み直しが競合処理のcommit後の状態を確認する。
+4. Refreshなら旧tokenの消費と後継token recordの追加を、reuse/logoutならfamily失効と必要なtoken record更新を実施する。
+5. 変更をcommitし、commit成功後にのみRefreshの新tokenをクライアントへ返す。
+
+使用済みtokenの再送は、familyロック取得後の再読込でconsumed状態を確認してからreuseと判定し、そのfamily親レコードを失効させる。これにより、競合Refreshが先にcommitした場合は後継recordを含むfamily全体を失効し、reuse検知が先にcommitした場合は後続Refreshが失効済みfamilyを読み取って拒否する。
+
+logout-allは `username` に紐づくfamily親レコードをID順など一貫した順序でロックし、取得後に対象familyを再検索・再確認してから全familyを失効させる。logout-allと同時にSigninが新しいfamilyを作成して対象から漏れることを防ぐため、Signinのfamily作成とlogout-allは、同一ユーザー単位の排他ロックを共通して取得する。ロック順序は「ユーザー単位ロック、family親ロック」の順に統一し、Signinはfamily作成後にユーザー単位ロックを解放する。logout-allは全familyの失効をcommitするまで両方のロックを保持する。
+
+外部キーによる親レコードの暗黙ロックだけに依存せず、アプリケーションがfamily親を明示的にロックする。どの処理もtoken行を先にロックしてからfamily親をロックする逆順を取らない。フロントエンドのタブ間Refresh排他も維持するが、これはUX上の重複要求を抑える補助であり、サーバー側の排他制御の代替にはしない。
 
 ## 7. 認証フロー
 
@@ -188,10 +209,10 @@ sequenceDiagram
     Browser->>API: API request (Authorization: Bearer)
     API-->>Browser: API response
     Browser->>API: POST /auth/refresh (refreshToken)
-    API->>DB: token検証・行ロック
+    API->>DB: family親をロックしtoken状態を再読込
     API->>LDAP: user状態・最新authoritiesを照会
     LDAP-->>API: user状態・authorities
-    API->>DB: 旧token消費・新token保存
+    API->>DB: 旧token消費・新token保存・transaction commit
     API-->>Browser: 新Access JWT + 新Refresh token
 ```
 
@@ -214,13 +235,16 @@ sequenceDiagram
 4. 期限切れ、失効済み、未知のRefresh tokenは拒否される。
 5. consumed tokenの再利用で同familyの全tokenが失効し、後続refreshも拒否される。
 6. 同一tokenへの並行refreshで複数の有効な後継tokenを作らない。
-7. 単一logoutは対象familyだけ、logout-allは対象ユーザーの全familyを失効する。
-8. Refresh時のLDAP権限変更が新Access JWTとレスポンスに反映される。
-9. LDAPユーザー無効化時にRefreshが拒否される（無効化属性・判定ルール確定後に検証）。
-10. Logout/LDAP無効化後も既発行Access JWTは最長15分有効となり得る。
-11. token平文がDB・ログ・URLに保存/出力されない。
-12. signin/refresh/logoutのアクセス制御、CORS preflight、HTTPS前提のデプロイ設定を確認する。
-13. PostgreSQLを使うrepository/integration testと、APIの正常系・異常系・境界値テストを用意する。
+7. Refreshとreuse検知が競合しても、両処理の完了後に有効な後継tokenが残らない。
+8. Refreshと単一logoutが競合しても、両処理の完了後に対象family内の有効なtokenが残らない。
+9. Refreshとlogout-allが競合しても、両処理の完了後に対象ユーザーのfamily内に有効な後継tokenが残らない。
+10. 単一logoutは対象familyだけ、logout-allは対象ユーザーの全familyを失効する。logout-allとSigninの競合で新規familyが失効対象から漏れない。
+11. Refresh時のLDAP権限変更が新Access JWTとレスポンスに反映される。
+12. LDAPユーザー無効化時にRefreshが拒否される（無効化属性・判定ルール確定後に検証）。
+13. Logout/LDAP無効化後も既発行Access JWTは最長15分有効となり得る。
+14. token平文がDB・ログ・URLに保存/出力されない。
+15. signin/refresh/logoutのアクセス制御、CORS preflight、HTTPS前提のデプロイ設定を確認する。
+16. PostgreSQLを使うrepository/integration testと、APIの正常系・異常系・境界値テストを用意する。
 
 ## 10. 要確認事項
 
