@@ -1,0 +1,79 @@
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # --- 各プロジェクトに mvnw / package.json が存在するか検出 ---
+      - name: Detect projects
+        id: detect
+        run: |
+          set -e
+          has_maven=false
+          has_node=false
+          # Maven プロジェクト（mvnw を持つディレクトリ）
+          if ls */mvnw >/dev/null 2>&1 || [ -f ./mvnw ]; then
+            has_maven=true
+          fi
+          # Node プロジェクト（package.json を持つディレクトリ）
+          if ls */package.json >/dev/null 2>&1 || [ -f ./package.json ]; then
+            has_node=true
+          fi
+          echo "has_maven=$has_maven" >> "$GITHUB_OUTPUT"
+          echo "has_node=$has_node"   >> "$GITHUB_OUTPUT"
+
+      # --- Java / Maven 系のセットアップ ---
+      - name: Set up JDK 25
+        if: steps.detect.outputs.has_maven == 'true'
+        uses: actions/setup-java@v6
+        with:
+          java-version: '25'
+          distribution: 'corretto'
+          cache: maven
+
+      - name: Download Maven dependencies (per module)
+        if: steps.detect.outputs.has_maven == 'true'
+        run: |
+          set -e
+          # mvnw を持つ各ディレクトリで依存解決を実行
+          while IFS= read -r -d '' wrapper; do
+            dir="$(dirname "$wrapper")"
+            echo "::group::Resolving Maven deps in $dir"
+            chmod +x "$wrapper"
+            (cd "$dir" && ./mvnw -B dependency:resolve dependency:resolve-plugins)
+            echo "::endgroup::"
+          done < <(find . -maxdepth 2 -name mvnw -not -path '*/node_modules/*' -print0)
+
+      # --- Node / Next.js 系のセットアップ ---
+      - name: Set up Node.js
+        if: steps.detect.outputs.has_node == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: front/package-lock.json
+
+      - name: Install Node dependencies (per project)
+        if: steps.detect.outputs.has_node == 'true'
+        run: |
+          set -e
+          while IFS= read -r -d '' pkg; do
+            dir="$(dirname "$pkg")"
+            echo "::group::Installing npm deps in $dir"
+            if [ -f "$dir/package-lock.json" ]; then
+              (cd "$dir" && npm ci)
+            else
+              (cd "$dir" && npm install)
+            fi
+            echo "::endgroup::"
+          done < <(find . -maxdepth 2 -name package.json -not -path '*/node_modules/*' -print0)
