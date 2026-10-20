@@ -1,0 +1,33 @@
+dn: ou=people,dc=balamb-garden,dc=edu
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=balamb-garden,dc=edu
+objectClass: organizationalUnit
+ou: groups
+
+# Cid
+dn: uid=cid,ou=people,dc=balamb-garden,dc=edu
+objectClass: inetOrgPerson
+uid: cid
+cn: Cid Kramer
+sn: Kramer
+userPassword: edea
+
+dn: cn=admins,ou=groups,dc=balamb-garden,dc=edu
+objectClass: groupOfNames
+cn: admins
+member: uid=cid,ou=people,dc=balamb-garden,dc=edu
+
+# Squall
+dn: uid=squall,ou=people,dc=balamb-garden,dc=edu
+objectClass: inetOrgPerson
+uid: squall
+cn: Squall Leonhart
+sn: Leonhart
+userPassword: griever
+
+dn: cn=students,ou=groups,dc=balamb-garden,dc=edu
+objectClass: groupOfNames
+cn: students
+member: uid=squall,ou=people,dc=balamb-garden,dc=edu
