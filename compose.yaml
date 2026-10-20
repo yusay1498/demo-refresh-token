@@ -4,15 +4,21 @@ services:
       context: ./api
     environment:
       APP_LDAP_URL: "ldap://openldap:389"
-      APP.LDAP.USER_DN_PATTERN: "uid={0},ou=people,dc=balamb-garden,dc=edu"
-      APP.LDAP.GROUP_SEARCH_BASE: "ou=groups,dc=balamb-garden,dc=edu"
-      APP.LDAP.GROUP_SEARCH_FILTER: "member={0}"
-      APP.LDAP.ADMIN_DN: "cn=admin,dc=balamb-garden,dc=edu"
-      APP.LDAP.ADMIN_PASSWORD: "But_the_Owls_are_still_around"
-      APP.JWT.SECRET: "random-string-of-32-characters-or-more-1234567890abcdef"
-      APP.JWT.ISSUER: "http://localhost:8080"
-      APP.JWT.TTL: "15m"
-      APP.CORS.ALLOW_ORIGINS: "*"
+      APP_LDAP_USER_DN_PATTERN: "uid={0},ou=people,dc=balamb-garden,dc=edu"
+      APP_LDAP_GROUP_SEARCH_BASE: "ou=groups,dc=balamb-garden,dc=edu"
+      APP_LDAP_GROUP_SEARCH_FILTER: "member={0}"
+      APP_LDAP_ADMIN_DN: "cn=admin,dc=balamb-garden,dc=edu"
+      APP_LDAP_ADMIN_PASSWORD: "But_the_Owls_are_still_around"
+      APP_JWT_SECRET: "random-string-of-32-characters-or-more-1234567890abcdef"
+      APP_JWT_ISSUER: "http://localhost:8080"
+      APP_JWT_TTL: "15m"
+      APP_CORS_ALLOW_ORIGINS: "*"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/postgres
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
     extra_hosts:
       - "localhost:host-gateway"
     ports:
@@ -32,3 +38,33 @@ services:
       LDAP_TLS: "false"
     volumes:
       - ./openldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif
+
+  postgres:
+    image: postgres:18
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - ./api/src/test/resources/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: pg_isready -h 127.0.0.1 -U postgres -d postgres
+      interval: 5s
+
+  dbgate:
+    image: dbgate/dbgate
+    environment:
+      CONNECTIONS: conn1
+      LABEL_conn1: postgres
+      SERVER_conn1: postgres
+      USER_conn1: postgres
+      PASSWORD_conn1: postgres
+      PORT_conn1: 5432
+      ENGINE_conn1: postgres@dbgate-plugin-postgres
+    ports:
+      - "5480:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy

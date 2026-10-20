@@ -24,7 +24,7 @@ LDAPログイン後に発行するAccess tokenの有効期間が切れた際、�
 
 1. LDAP認証に成功したとき、既存のAccess JWTに加えてRefresh tokenを発行する。
 2. Refresh tokenを使ってAccess JWTと新しいRefresh tokenを発行する。各Refresh tokenは一度だけ利用可能とする。
-3. Refresh tokenの更新時にLDAP上のユーザー状態と権限を再確認し、最新権限をAccess JWTに反映する。
+3. Refresh tokenの更新時にLDAPから最新のauthoritiesを再取得し、Access JWTに反映する。現行LDAPにアカウント無効化属性の定義がないため、無効化状態の判定は行わない。
 4. 現在のブラウザセッションのログアウトと、そのユーザーの全ブラウザセッションのログアウトを提供する。
 5. 期限切れ、失効済み、形式不正のtokenでは更新を拒否する。
 6. 使用済みRefresh tokenの再利用を検知した場合、そのtoken family（ログインセッション）を失効させる。
@@ -39,6 +39,7 @@ LDAPログイン後に発行するAccess tokenの有効期間が切れた際、�
 - LocalStorageはJavaScriptから読み取れるため、XSSが成立するとtoken窃取の可能性がある。出力エスケープ、CSP、依存関係管理、不要な第三者スクリプトの排除を実施する。サニタイズだけでXSSリスクがなくなるとは扱わない。
 - 本番CORS originはフロントエンドのoriginに限定する。cookie credentialsは有効化しない。
 - DBまたはLDAPが利用できない場合、Refreshを許可せず失敗させる（fail closed）。
+- LDAPアカウントの有効/無効状態は、判定属性・運用ルールがないためRefresh時の検証対象外とする。無効化されたアカウントでもRefresh tokenが有効な間は更新できる残余リスクを受容する。
 - 認証失敗レスポンスから、ユーザーの存在有無やtokenの具体的な失効理由を不必要に漏らさない。
 
 ## 4. Tokenポリシー
@@ -46,17 +47,17 @@ LDAPログイン後に発行するAccess tokenの有効期間が切れた際、�
 | 項目 | 方針 |
 |---|---|
 | Access token | 署名付きJWT。現行の `token` フィールドを継続利用 |
-| Access token有効期間 | 15分を維持する案 |
+| Access token有効期間 | 15分 |
 | Refresh token | 256-bit相当以上のランダムな不透明token |
 | Refresh token保管 | SHA-256 hashをPostgreSQLに保存。平文は発行レスポンス以外に保存しない |
 | Refresh rotation | 成功のたびに旧tokenを使用済みにし、新tokenを発行 |
-| idle timeout | 最終利用から8時間を仮案とする |
-| absolute timeout | 初回発行から最大24時間を仮案とする |
+| idle timeout | 最終利用から8時間 |
+| absolute timeout | 初回発行から最大24時間 |
 | 保存場所 | フロントエンドのLocalStorage。複数タブ間で共有 |
 
-有効期間は「勤務時間内のみ」という要望に合わせた推奨仮案であり、数値は業務責任者の最終確認対象とする。更新後の有効期限は `min(now + idle timeout, family absolute expiry)` とする。
+有効期間は「勤務時間内のみ」という要望に基づく合意値とする。更新後のRefresh token有効期限は `min(now + 8 hours, family absolute expiry)` とする。
 
-Access JWTは自己完結型のため、logoutやLDAPアカウント無効化後も、発行済みJWTが最大15分有効な場合がある。この猶予は許容する。即時失効が必要になった場合は、JWT denylist、ユーザー単位のtoken version照会などを別途設計する。
+Access JWTは自己完結型のため、logout後も発行済みJWTが最大15分有効な場合がある。この猶予は許容する。LDAPアカウント無効化状態はRefresh時に検証しないため、無効化後もRefresh tokenがfamily期限まで有効ならAccess JWTを再発行できる。無効化後の継続利用は最長でfamilyの残り有効期間（最大24時間）と最後に発行したAccess JWTの15分を合わせた範囲となり得る。即時失効やLDAP無効化時の失効が必要になった場合は、LDAP属性の追加と状態照会、JWT denylist、ユーザー単位のtoken version照会などを別途設計する。
 
 ## 5. API設計
 
@@ -162,18 +163,82 @@ PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamil
 |---|---|---|
 | `id` | `VARCHAR(36)` | PK、UUID文字列 |
 | `family_id` | `VARCHAR(36)` | `refresh_token_family.id` へのFK。index対象 |
-| `username` | `VARCHAR(255)` | LDAP subject。logout-allの検索対象 |
 | `token_hash` | `CHAR(64)` | SHA-256 hex。NOT NULL、UNIQUE |
 | `issued_at` | `TIMESTAMPTZ` | 発行時刻 |
 | `expires_at` | `TIMESTAMPTZ` | idle timeoutを反映した期限 |
 | `consumed_at` | `TIMESTAMPTZ` | rotationで使用済みになった時刻。未使用ならNULL |
 | `revoked_at` | `TIMESTAMPTZ` | token単体の失効時刻。未失効ならNULL |
 | `replaced_by_id` | `VARCHAR(36)` | rotation後のtoken record ID。未更新ならNULL |
-| `created_at` | `TIMESTAMPTZ` | レコード作成時刻 |
 
-必要なindexはtoken hashのunique index、`family_id`、`username`。有効状態は未消費・未失効・期限内で判定する。消費済みrecordは再利用検知に必要な期間保持し、familyの絶対期限を過ぎたrecordのcleanup方針を運用要件として定める。
+必要なindexはtoken hashのunique index、tokenの `family_id` と自己参照FK列 `replaced_by_id`、familyの `username` と `absolute_expires_at`。`replaced_by_id` のindexは、自己参照FKの `ON DELETE SET NULL` が参照元recordを検索する際の全件走査を避けるために設ける。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
 
-### 6.1 Family単位の排他性
+### 6.1 PostgreSQL DDL
+
+PostgreSQLをComposeに追加し、Refresh token schemaはPostgreSQL固有のDDLとしてリポジトリで管理する。初期DDL案は以下のとおり。migration方式とcleanup運用は実装時に確定する。
+
+```sql
+CREATE TABLE IF NOT EXISTS refresh_token_family (
+  id VARCHAR(36) PRIMARY KEY,
+  username VARCHAR(255) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  absolute_expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_refresh_token_family_expiry
+    CHECK (absolute_expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_token_family_username
+  ON refresh_token_family (username);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_token_family_absolute_expires_at
+  ON refresh_token_family (absolute_expires_at);
+
+COMMENT ON TABLE refresh_token_family IS 'Refresh token family representing one login session';
+COMMENT ON COLUMN refresh_token_family.id IS 'UUID identifying the login session';
+COMMENT ON COLUMN refresh_token_family.username IS 'LDAP subject that owns the session';
+COMMENT ON COLUMN refresh_token_family.created_at IS 'Time when the family was created';
+COMMENT ON COLUMN refresh_token_family.absolute_expires_at IS 'Non-renewable absolute expiration time';
+COMMENT ON COLUMN refresh_token_family.revoked_at IS 'Time when the entire family was revoked';
+
+CREATE TABLE IF NOT EXISTS refresh_token (
+  id VARCHAR(36) PRIMARY KEY,
+  family_id VARCHAR(36) NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  replaced_by_id VARCHAR(36),
+  CONSTRAINT uq_refresh_token_hash UNIQUE (token_hash),
+  CONSTRAINT fk_refresh_token_family
+    FOREIGN KEY (family_id) REFERENCES refresh_token_family (id)
+      ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_refresh_token_replacement
+    FOREIGN KEY (replaced_by_id) REFERENCES refresh_token (id)
+      ON DELETE SET NULL ON UPDATE RESTRICT,
+  CONSTRAINT chk_refresh_token_expiry CHECK (expires_at > issued_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_token_family_id
+  ON refresh_token (family_id);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_token_replaced_by_id
+  ON refresh_token (replaced_by_id);
+
+COMMENT ON TABLE refresh_token IS 'Hashed refresh token history for rotation and reuse detection';
+COMMENT ON COLUMN refresh_token.id IS 'UUID identifying this refresh token record';
+COMMENT ON COLUMN refresh_token.family_id IS 'Owning login session family';
+COMMENT ON COLUMN refresh_token.token_hash IS 'SHA-256 hexadecimal digest of the opaque token';
+COMMENT ON COLUMN refresh_token.issued_at IS 'Time when this token was issued';
+COMMENT ON COLUMN refresh_token.expires_at IS 'Idle expiration time, capped by family absolute expiration';
+COMMENT ON COLUMN refresh_token.consumed_at IS 'Time when rotation consumed this token';
+COMMENT ON COLUMN refresh_token.revoked_at IS 'Time when this token record was revoked';
+COMMENT ON COLUMN refresh_token.replaced_by_id IS 'Record ID of the token issued by rotation';
+```
+
+`username` はfamily親に保持し、token履歴側には重複保持しない。`ON DELETE CASCADE` はfamilyをcleanupする際にtoken履歴も削除するためのものとし、通常のlogoutやreuse検知では物理削除せず失効状態を記録する。期限切れfamilyのcleanupは再利用検知・監査に必要な保持期間を経過した後に行う。
+
+### 6.2 Family単位の排他性
 
 token行だけのロックでは、family失効UPDATEが実行時点でまだ存在しない後継recordを対象にできない。特にPostgreSQLのREAD COMMITTEDでは、失効UPDATEがRefresh transactionを待った後も、そのUPDATE開始時のsnapshotに含まれなかった後継recordを取りこぼす可能性がある。このため、token行ロックだけではRefreshによる後継record追加とfamily全体の失効を直列化できない。
 
@@ -225,7 +290,9 @@ sequenceDiagram
 - Signinにはrate limitとブルートフォース監視を適用する。適用箇所（API gateway、proxy、アプリ）はデプロイ構成に合わせて決定する。
 - JWT secret、LDAP管理資格情報、DB資格情報はComposeの固定値を本番に流用せず、環境変数またはsecret managerから供給する。
 - 本番LDAP接続はTLS（LDAPSまたはStartTLS）を利用する。
-- PostgreSQL接続設定、volume、backup/restore、schema migration方式をCompose/デプロイ設計に追加する。migrationツールは現行依存にないため、導入方式は実装計画で決定する。
+- デモ環境ではPostgreSQLサービスをComposeに追加し、named volumeでデータを永続化する。APIはPostgreSQLのhealthcheck完了後に起動する。
+- PostgreSQLの接続情報は環境変数でAPIに渡す。DB資格情報をComposeファイルに固定値として置かず、ローカル用の設定と本番secretを分離する。
+- PostgreSQL向けDDLはリポジトリで管理し、既存DBにも適用できるversioned migration方式を採用する。Composeの初回起動用SQLだけにschema更新を依存させない。migrationツール、backup/restore、期限切れfamilyのcleanup方式は実装時に決定する。
 
 ## 9. 受け入れ条件・テスト観点
 
@@ -240,20 +307,19 @@ sequenceDiagram
 9. Refreshとlogout-allが競合しても、両処理の完了後に対象ユーザーのfamily内に有効な後継tokenが残らない。
 10. 単一logoutは対象familyだけ、logout-allは対象ユーザーの全familyを失効する。logout-allとSigninの競合で新規familyが失効対象から漏れない。
 11. Refresh時のLDAP権限変更が新Access JWTとレスポンスに反映される。
-12. LDAPユーザー無効化時にRefreshが拒否される（無効化属性・判定ルール確定後に検証）。
-13. Logout/LDAP無効化後も既発行Access JWTは最長15分有効となり得る。
+12. LDAPアカウント無効化状態は判定しないため、Refresh tokenが有効なら更新できることを仕様として確認する。
+13. Logout後も既発行Access JWTは最長15分有効となり得る。
 14. token平文がDB・ログ・URLに保存/出力されない。
 15. signin/refresh/logoutのアクセス制御、CORS preflight、HTTPS前提のデプロイ設定を確認する。
-16. PostgreSQLを使うrepository/integration testと、APIの正常系・異常系・境界値テストを用意する。
+16. Compose上のPostgreSQLがhealthcheck後にAPIへ接続され、named volumeで再起動後もデータが保持される。
+17. PostgreSQL向けDDL/migrationとrepository/integration testを用意し、APIの正常系・異常系・境界値テストを実施する。
 
 ## 10. 要確認事項
 
-1. Access 15分、Refresh idle 8時間、absolute 24時間を最終値として承認するか。
-2. LDAPのユーザー無効化を何で判定するか。現行LDIFとプロパティには有効/無効属性がなく、削除、ロック属性、別属性のいずれが運用ルールか確認が必要。
-3. フロントエンドのoriginと対象ブラウザ。複数タブでのRefresh排他にWeb Locks API等を利用できるか。
-4. PostgreSQLの実行環境、volume/backup要件、schema migration方式。
-5. logout-allを呼ぶためのAccess JWTが期限切れの場合、再ログインを求める挙動でよいか（本書ではその前提）。
-6. LDAP/DB障害時にRefreshを503で失敗させ、再試行をフロント側で制御する方針でよいか。
+1. フロントエンドのoriginと対象ブラウザ。複数タブでのRefresh排他にWeb Locks API等を利用できるか。
+2. PostgreSQLのDB名・ユーザー名などの開発用設定、backup要件、migrationツール、期限切れfamilyのcleanup方式。
+3. logout-allを呼ぶためのAccess JWTが期限切れの場合、再ログインを求める挙動でよいか（本書ではその前提）。
+4. LDAP/DB障害時にRefreshを503で失敗させ、再試行をフロント側で制御する方針でよいか。
 
 ## 参考
 
