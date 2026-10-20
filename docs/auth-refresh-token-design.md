@@ -147,6 +147,51 @@ Request bodyのRefresh tokenが属するfamilyを失効させる。正常・既�
 
 PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamily親レコードを保持する。LDAPユーザーは外部管理のため、ユーザーテーブルへの外部キーは設けない。
 
+### 6.1 ドメイン設計と集約
+
+#### 集約境界
+
+`RefreshTokenFamily` を集約ルートとし、そのログインセッションで発行された `RefreshToken` 履歴を子エンティティとして扱う。rotation、reuse検知、単一logoutはいずれもfamily内の状態整合性を変更し、同じfamily親レコードを排他ロックする必要があるため、familyを集約境界とする。
+
+| ドメイン要素 | 責務・属性 |
+|---|---|
+| `RefreshTokenFamily`（集約ルート） | `familyId`、LDAP subjectとしての `username`、作成時刻、変更されない絶対有効期限、失効時刻を保持し、token発行・rotation・family失効の一貫性を守る |
+| `RefreshToken`（子エンティティ） | token record ID、token hash、発行時刻、idle期限、消費時刻、token単体の失効時刻、後継record IDを保持する |
+| `RefreshTokenHash`（値オブジェクト） | 不透明tokenのハッシュを表現する。生tokenは永続化せず、ドメインモデルにも保持しない |
+| `LdapUsername`（識別値） | LDAP subjectを表す識別値。ユーザー情報の正本はLDAPとし、この集約内にユーザーアカウントを複製しない |
+
+Refresh tokenの全履歴はreuse検知と監査のためDBに保持するが、履歴件数はrotation回数に応じて増えるため、集約を再構成するときに全子エンティティを毎回メモリへロードしない。提示されたtokenに対応するrecordとfamily rootを取得し、family rootのロック取得後にtoken状態を再確認する。ドメイン操作はその対象recordとfamily状態に対して行い、永続化アダプターが変更を保存する。
+
+#### 状態と不変条件
+
+Familyの有効状態は、`revokedAt` が未設定で、現在時刻が絶対有効期限より前であることから判定する。期限切れは時間から導出する状態であり、必ずしもDBへ状態更新しない。
+
+| 対象 | 状態・遷移 |
+|---|---|
+| Family | `ACTIVE` から `REVOKED` へ遷移する。`EXPIRED` は絶対有効期限から導出し、期限を延長しない |
+| RefreshToken | `ACTIVE` からrotationによる `CONSUMED` またはlogout等による `REVOKED` へ遷移する。期限切れは `expiresAt` から導出する |
+| 消費済みtoken再利用 | `CONSUMED` tokenの提示を検出したとき、所属Familyを `REVOKED` にする |
+
+集約が守る不変条件:
+
+1. Familyの絶対有効期限は作成時に決定し、その後変更しない。
+2. Familyが失効済み、または絶対期限切れならtokenをrotationしない。
+3. rotationでは、未消費・未失効・期限内の提示tokenを一度だけ消費し、同一familyに期限内の後継tokenを1件作る。
+4. 有効なfamilyに同時に存在できるcurrent tokenは1件だけとする。
+5. 使用済みtokenの再利用はfamily全体を失効させる。未知tokenや期限切れtokenの提示は認証拒否とし、familyの存在を外部へ漏らさない。
+6. Family失効後は、そのfamilyに属するtokenを使ったrotationを許可しない。
+
+ドメイン操作の契約は、概ね `createSession`、`rotate(presentedTokenHash, replacementTokenRecord, now)`、`revoke(now)` とする。ドメインには平文tokenを渡さず、`rotate` は通常rotation、期限/失効による拒否、consumed tokenのreuse検知を区別できる結果を返す。reuse検知ではFamilyを失効させてから、呼び出し元がトランザクションをcommitし、APIでは401を返す。例外の型や結果型の具体的なJava表現は実装時に決める。
+
+#### アプリケーション・永続化との責務分担
+
+- Signin use caseはLDAP資格情報の認証とauthorities取得を行い、Refresh tokenの生成・ハッシュ化、Familyの作成、Access JWT発行を調整する。
+- Refresh use caseはtoken hashからfamilyを特定し、トランザクション内でfamily rootをロックして状態を再取得する。LDAPから最新authoritiesを取得し、rotationとAccess JWT発行を調整する。
+- 単一logoutは提示tokenに対応するfamily rootをロックしてfamilyを失効させる。logout-allはusername単位の排他を取得し、対象familyをロックして失効させる。
+- 集約ルートはSpring、JDBC、SQL、LDAP client、JWTライブラリに依存しない。Repository interfaceはDomain側に置き、PostgreSQLの `SELECT ... FOR UPDATE` と `@Transactional` の実装詳細はInfrastructure/Application側に置く。
+- トランザクションはApplication use caseが開始し、familyの状態変更とtoken履歴保存がcommitされるまでfamily root lockを保持する。APIに新しいtokenを返すのはcommit成功後とする。
+- signinとlogout-allの競合を防ぐusername単位の安定した排他機構は、Domain上の操作要件として定義する。PostgreSQL advisory lock、guard row等の実現方式とデッドロック回避はInfrastructure設計で確定する。
+
 #### `refresh_token_family`（family親レコード）
 
 | カラム | 型案 | 制約・用途 |
@@ -172,7 +217,7 @@ PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamil
 
 必要なindexはtoken hashのunique index、tokenの `family_id` と自己参照FK列 `replaced_by_id`、familyの `username` と `absolute_expires_at`。`replaced_by_id` のindexは、自己参照FKの `ON DELETE SET NULL` が参照元recordを検索する際の全件走査を避けるために設ける。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
 
-### 6.1 PostgreSQL DDL
+### 6.2 PostgreSQL DDL
 
 PostgreSQLをComposeに追加し、Refresh token schemaはPostgreSQL固有のDDLとしてリポジトリで管理する。初期DDL案は以下のとおり。migration方式とcleanup運用は実装時に確定する。
 
@@ -238,7 +283,7 @@ COMMENT ON COLUMN refresh_token.replaced_by_id IS 'Record ID of the token issued
 
 `username` はfamily親に保持し、token履歴側には重複保持しない。`ON DELETE CASCADE` はfamilyをcleanupする際にtoken履歴も削除するためのものとし、通常のlogoutやreuse検知では物理削除せず失効状態を記録する。期限切れfamilyのcleanupは再利用検知・監査に必要な保持期間を経過した後に行う。
 
-### 6.2 Family単位の排他性
+### 6.3 Family単位の排他性
 
 token行だけのロックでは、family失効UPDATEが実行時点でまだ存在しない後継recordを対象にできない。特にPostgreSQLのREAD COMMITTEDでは、失効UPDATEがRefresh transactionを待った後も、そのUPDATE開始時のsnapshotに含まれなかった後継recordを取りこぼす可能性がある。このため、token行ロックだけではRefreshによる後継record追加とfamily全体の失効を直列化できない。
 
