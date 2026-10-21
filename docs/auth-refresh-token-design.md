@@ -151,16 +151,16 @@ PostgreSQLにtoken単位の履歴と、安定したロック対象となるfamil
 
 #### 集約境界
 
-`RefreshTokenFamily` を集約ルートとし、そのログインセッションで発行された `RefreshToken` 履歴を子エンティティとして扱う。rotation、reuse検知、単一logoutはいずれもfamily内の状態整合性を変更し、同じfamily親レコードを排他ロックする必要があるため、familyを集約境界とする。
+`RefreshTokenFamily` を集約ルートとし、現在利用可能な `RefreshToken` を子エンティティとして所有する。rotation、reuse検知、単一logoutはいずれもfamily内の状態整合性を変更し、同じfamily親レコードを排他ロックする必要があるため、familyを集約境界とする。過去の消費済みtoken recordは再利用検知に必要な永続化履歴としてDBに残すが、すべてを集約のメモリ表現へロードする対象にはしない。
 
 | ドメイン要素 | 責務・属性 |
 |---|---|
-| `RefreshTokenFamily`（集約ルート） | `familyId`、LDAP subjectとしての `username`、作成時刻、変更されない絶対有効期限、失効時刻を保持し、token発行・rotation・family失効の一貫性を守る |
-| `RefreshToken`（子エンティティ） | token record ID、token hash、発行時刻、idle期限、消費時刻、token単体の失効時刻、後継record IDを保持する |
+| `RefreshTokenFamily`（集約ルート） | `familyId`、LDAP subjectとしての `username`、作成時刻、変更されない絶対有効期限、失効時刻、current tokenを保持し、token発行・rotation・family失効の一貫性を守る |
+| `RefreshToken`（子エンティティ） | 現在のtokenについてrecord ID、token hash、発行時刻、idle期限、消費時刻、token単体の失効時刻、後継record IDを保持する。消費済み履歴はRepositoryが再利用検知用に保持する |
 | `RefreshTokenHash`（値オブジェクト） | 不透明tokenのハッシュを表現する。生tokenは永続化せず、ドメインモデルにも保持しない |
 | `LdapUsername`（識別値） | LDAP subjectを表す識別値。ユーザー情報の正本はLDAPとし、この集約内にユーザーアカウントを複製しない |
 
-Refresh tokenの全履歴はreuse検知と監査のためDBに保持するが、履歴件数はrotation回数に応じて増えるため、集約を再構成するときに全子エンティティを毎回メモリへロードしない。提示されたtokenに対応するrecordとfamily rootを取得し、family rootのロック取得後にtoken状態を再確認する。ドメイン操作はその対象recordとfamily状態に対して行い、永続化アダプターが変更を保存する。
+Refresh tokenの全履歴はreuse検知と監査のためDBに保持するが、集約はcurrent tokenのみを保持し、履歴全件を毎回メモリへロードしない。提示されたtoken hashからfamilyと提示token recordを特定し、family rootのロック取得後にfamilyのcurrent tokenおよび提示tokenの状態を再確認する。通常rotationでは集約が旧current tokenを消費済みにし、新tokenをcurrent tokenとして持つfamily状態を返す。consumed tokenが提示された場合は、履歴recordから所属familyを特定したうえで集約を失効させる。永続化アダプターは遷移したfamilyとtoken recordを保存する。
 
 #### 状態と不変条件
 
@@ -177,20 +177,21 @@ Familyの有効状態は、`revokedAt` が未設定で、現在時刻が絶対�
 1. Familyの絶対有効期限は作成時に決定し、その後変更しない。
 2. Familyが失効済み、または絶対期限切れならtokenをrotationしない。
 3. rotationでは、未消費・未失効・期限内の提示tokenを一度だけ消費し、同一familyに期限内の後継tokenを1件作る。
-4. 有効なfamilyに同時に存在できるcurrent tokenは1件だけとする。
+4. 集約が保持するcurrent tokenは1件だけとし、DBロック中にそのrecordを次のcurrent tokenへ置き換える。
 5. 使用済みtokenの再利用はfamily全体を失効させる。未知tokenや期限切れtokenの提示は認証拒否とし、familyの存在を外部へ漏らさない。
 6. Family失効後は、そのfamilyに属するtokenを使ったrotationを許可しない。
 
-ドメイン操作の契約は、概ね `createSession`、`rotate(presentedTokenHash, replacementTokenRecord, now)`、`revoke(now)` とする。ドメインには平文tokenを渡さず、`rotate` は通常rotation、期限/失効による拒否、consumed tokenのreuse検知を区別できる結果を返す。reuse検知ではFamilyを失効させてから、呼び出し元がトランザクションをcommitし、APIでは401を返す。例外の型や結果型の具体的なJava表現は実装時に決める。
+ドメイン操作の契約は、概ね `createSession`、`rotate(presentedToken, replacementToken, now)`、`revoke(now)` とする。ドメインには平文tokenを渡さず、`rotate` は通常rotation、期限/失効による拒否、consumed tokenのreuse検知を区別できる結果を返す。提示tokenがcurrent tokenと一致するかはIDとhashで検証する。reuse検知ではFamilyを失効させてから、呼び出し元がトランザクションをcommitし、APIでは401を返す。例外の型や結果型の具体的なJava表現は実装時に決める。
 
 #### アプリケーション・永続化との責務分担
 
 - Signin use caseはLDAP資格情報の認証とauthorities取得を行い、Refresh tokenの生成・ハッシュ化、Familyの作成、Access JWT発行を調整する。
-- Refresh use caseはtoken hashからfamilyを特定し、トランザクション内でfamily rootをロックして状態を再取得する。LDAPから最新authoritiesを取得し、rotationとAccess JWT発行を調整する。
-- 単一logoutは提示tokenに対応するfamily rootをロックしてfamilyを失効させる。logout-allはusername単位の排他を取得し、対象familyをロックして失効させる。
-- 集約ルートはSpring、JDBC、SQL、LDAP client、JWTライブラリに依存しない。Repository interfaceはDomain側に置き、PostgreSQLの `SELECT ... FOR UPDATE` と `@Transactional` の実装詳細はInfrastructure/Application側に置く。
-- トランザクションはApplication use caseが開始し、familyの状態変更とtoken履歴保存がcommitされるまでfamily root lockを保持する。APIに新しいtokenを返すのはcommit成功後とする。
-- signinとlogout-allの競合を防ぐusername単位の安定した排他機構は、Domain上の操作要件として定義する。PostgreSQL advisory lock、guard row等の実現方式とデッドロック回避はInfrastructure設計で確定する。
+- `RefreshTokenFamilyRepository` はfamily集約の取得・保存を担当し、`RefreshTokenRepository` はRefreshToken履歴の検索・保存を担当する。各Repositoryは集約/Entityの永続化操作を提供し、signin/rotation/revocation等の業務手順をRepositoryメソッド名に埋め込まない。
+- Refresh use caseはApplication層で `@Transactional` を開始し、token hashで履歴を検索し、対応するfamilyを更新用に取得した後、token履歴を再読込する。family rootをロックしてから再読込することで、先行transactionのrotation/revoke結果を判定する。LDAPからauthoritiesを取得し、集約の状態遷移、各Repositoryへの保存、Access JWT発行を調整する。
+- 単一logoutもApplication層がtoken検索、family取得、family失効、保存を調整する。logout-allはusernameに属するfamilyを更新用に取得して順に失効・保存する。
+- Repository interfaceはDomain側に置き、Spring/JDBC/SQLに依存させない。`findByIdForUpdate` と `findAllByUsernameForUpdate` は集約の並行更新を保証するRepository契約であり、`SELECT ... FOR UPDATE`、行ロック順、ユーザー単位guard row/advisory lockの具体方式はInfrastructure実装に閉じ込める。
+- トランザクション境界はApplication use caseが所有する。rotation時は消費済みtokenの保存と新しいfamily/current tokenの保存を同じtransactionで行い、reuse検知時はfamily失効を保存してcommitした後にAPIで401へ変換する。レスポンスのtokenを返すのもcommit成功後とする。
+- signinの新規family作成とlogout-allは、Infrastructure実装で同一username guardを共有する。新規family保存はguard取得中に行い、logout-allはguard取得後に対象familyをID順でロックする。これにより並行Signinがlogout-all対象から漏れないようにする。guardの実現方法とデッドロック回避はInfrastructure設計で確定する。
 
 #### `refresh_token_family`（family親レコード）
 

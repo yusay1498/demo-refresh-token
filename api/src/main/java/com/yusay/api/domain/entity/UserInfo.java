@@ -1,4 +1,4 @@
-package com.yusay.api.domain;
+package com.yusay.api.domain.entity;
 
 import java.util.List;
 
