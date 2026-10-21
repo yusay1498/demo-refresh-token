@@ -10,7 +10,7 @@ LDAPログイン後に発行するAccess tokenの有効期間が切れた際、�
 
 ## 2. 現行構成
 
-- `POST /auth/signin` がLDAPのユーザー名・パスワードを認証し、JWTを1つ発行する。
+- `POST /auth/signIn` がLDAPのユーザー名・パスワードを認証し、JWTを1つ発行する。
 - 成功レスポンスは `token`、`username`、`authorities` を持つ。既存クライアントとの互換性のため、このフィールド名と意味を維持する。
 - JWTにはissuer、subject、issued-at、expires-at、JWT ID、authoritiesが含まれる。
 - Composeの `APP.JWT.TTL` は `15m`。JWT設定プロパティは `app.jwt.ttl`。
@@ -63,7 +63,7 @@ Access JWTは自己完結型のため、logout後も発行済みJWTが最大15�
 
 すべてのtoken交換APIはHTTPSを必須とする。JSONのContent-Typeは `application/json` とする。
 
-### 5.1 `POST /auth/signin`
+### 5.1 `POST /auth/signIn`
 
 LDAP資格情報を認証し、Access/Refresh tokenを発行する。
 
@@ -122,7 +122,7 @@ Response `200 OK`:
 - LDAPに接続できない場合は `503 Service Unavailable` 相当とし、tokenをローテーションしない。
 - フロントエンドはRefresh処理を単一化する。複数タブ間の排他方式（Web Locks API等）は対象ブラウザを確認して確定する。
 
-### 5.3 `POST /auth/logout`
+### 5.3 `POST /auth/signOut`
 
 Request bodyのRefresh tokenが属するfamilyを失効させる。正常・既に失効済みの場合とも `204 No Content` を返し、tokenの有効性を外部から判別できないようにする。フロントエンドはtokenをLocalStorageから削除する。
 
@@ -132,15 +132,15 @@ Request bodyのRefresh tokenが属するfamilyを失効させる。正常・既�
 }
 ```
 
-### 5.4 `POST /auth/logout-all`
+### 5.4 `POST /auth/signOutAll`
 
 有効なAccess JWTのsubjectに紐づく全Refresh token familyを失効させる。Access JWTが期限切れの場合は認証できないため `401 Unauthorized`。成功時は `204 No Content`。
 
 ### 5.5 既存API
 
 - `GET /auth/me` は引き続きAccess JWTを要求する。
-- サインイン、Refresh、単一logoutは未認証で呼び出せる。Refresh/logoutはbodyのtokenを必須とする。
-- `logout-all`、`/auth/me`、その他の保護対象APIは認証必須とする。
+- サインイン、Refresh、単一signoutは未認証で呼び出せる。Refresh/signoutはbodyのtokenを必須とする。
+- `signOutAll`、`/auth/me`、その他の保護対象APIは認証必須とする。
 - Security設定でルート単位の許可/認証ルールを明示し、意図しない匿名アクセスがないことをテストする。
 
 ## 6. Refresh tokenデータ設計
@@ -321,7 +321,7 @@ sequenceDiagram
     participant API as Auth API
     participant LDAP as LDAP
     participant DB as PostgreSQL
-    Browser->>API: POST /auth/signin (username/password)
+    Browser->>API: POST /auth/signIn (username/password)
     API->>LDAP: bind認証・authorities取得
     LDAP-->>API: 認証結果・authorities
     API->>DB: Refresh token hashを保存
@@ -365,7 +365,7 @@ sequenceDiagram
 12. LDAPアカウント無効化状態は判定しないため、Refresh tokenが有効なら更新できることを仕様として確認する。
 13. Logout後も既発行Access JWTは最長15分有効となり得る。
 14. token平文がDB・ログ・URLに保存/出力されない。
-15. signin/refresh/logoutのアクセス制御、CORS preflight、HTTPS前提のデプロイ設定を確認する。
+15. signin/refresh/signoutのアクセス制御、CORS preflight、HTTPS前提のデプロイ設定を確認する。
 16. Compose上のPostgreSQLがhealthcheck後にAPIへ接続され、named volumeで再起動後もデータが保持される。
 17. PostgreSQL向けDDL/migrationとrepository/integration testを用意し、APIの正常系・異常系・境界値テストを実施する。
 

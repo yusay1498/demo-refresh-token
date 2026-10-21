@@ -1,6 +1,7 @@
 package com.yusay.api.config;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
+import jakarta.servlet.DispatcherType;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -144,6 +145,16 @@ public class SecurityConfig {
                 .csrf(CsrfConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(authorize -> authorize
+                    .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                    .requestMatchers(
+                        HttpMethod.POST,
+                        "/auth/signIn",
+                        "/auth/refresh",
+                        "/auth/signOut"
+                    ).permitAll()
+                    .requestMatchers(HttpMethod.GET, "/auth/anon").permitAll()
+                    .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)));
 
