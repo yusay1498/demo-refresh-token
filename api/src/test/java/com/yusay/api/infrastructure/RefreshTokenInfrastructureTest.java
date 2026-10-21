@@ -8,6 +8,7 @@ import com.yusay.api.domain.repository.RefreshTokenFamilyRepository;
 import com.yusay.api.domain.repository.RefreshTokenRepository;
 import com.yusay.api.infrastructure.dao.RefreshTokenDao;
 import com.yusay.api.infrastructure.dao.RefreshTokenFamilyDao;
+import com.yusay.api.infrastructure.dao.RefreshTokenLockDao;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jdbc.test.autoconfigure.DataJdbcTest;
@@ -30,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
     JdbcRefreshTokenFamilyRepository.class,
     JdbcRefreshTokenRepository.class,
     RefreshTokenFamilyDao.class,
-    RefreshTokenDao.class
+    RefreshTokenDao.class,
+    RefreshTokenLockDao.class
 })
 class RefreshTokenInfrastructureTest {
     private static final String FAMILY_ID_1 = "00000000-0000-0000-0000-000000000001";
@@ -54,11 +56,19 @@ class RefreshTokenInfrastructureTest {
     RefreshTokenRepository tokenRepository;
 
     @Autowired
+    RefreshTokenLockDao refreshTokenLockDao;
+
+    @Autowired
     JdbcClient jdbcClient;
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.sql.init.mode", () -> "always");
+    }
+
+    @Test
+    void givenUsername_whenLockUsername_thenAcquiresAdvisoryLock() {
+        refreshTokenLockDao.lockUsername("cid");
     }
 
     @Test
