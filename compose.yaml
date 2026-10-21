@@ -12,6 +12,9 @@ services:
       APP_JWT_SECRET: "random-string-of-32-characters-or-more-1234567890abcdef"
       APP_JWT_ISSUER: "http://localhost:8080"
       APP_JWT_TTL: "15m"
+      APP_AUTH_REFRESHTOKEN_IDLETIMEOUT: "8h"
+      APP_AUTH_REFRESHTOKEN_ABSOLUTETIMEOUT: "24h"
+      APP_AUTH_REFRESHTOKEN_TOKENLENGTHBYTES: "32"
       APP_CORS_ALLOW_ORIGINS: "*"
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/postgres
       SPRING_DATASOURCE_USERNAME: postgres

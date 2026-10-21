@@ -160,6 +160,42 @@ class RefreshTokenInfrastructureTest {
             VALUES ('00000000-0000-0000-0000-000000000001', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z');
             """,
         """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at, revoked_at)
+            VALUES ('00000000-0000-0000-0000-000000000002', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z', '2026-10-21T11:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at)
+            VALUES ('00000000-0000-0000-0000-000000000003', 'cid', '2026-10-21T00:00:00Z', '2026-10-21T11:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000003', 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """
+    })
+    void givenActiveRevokedAndExpiredFamilies_whenFindAllActiveByUsername_thenReturnsOnlyActiveFamily() {
+        List<RefreshTokenFamily> result = familyRepository.findAllActiveByUsername(
+            "cid",
+            OffsetDateTime.parse("2026-10-21T12:00:00Z")
+        );
+
+        assertThat(result).extracting(RefreshTokenFamily::id).containsExactly(FAMILY_ID_1);
+    }
+
+    @Test
+    @Sql(statements = {
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z');
+            """,
+        """
             INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
             VALUES ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-10-21T00:10:00Z', '2026-10-21T08:10:00Z');
             """
