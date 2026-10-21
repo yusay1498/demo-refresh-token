@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS refresh_token (
             ON DELETE CASCADE ON UPDATE RESTRICT,
     CONSTRAINT fk_refresh_token_replacement
         FOREIGN KEY (replaced_by_id) REFERENCES refresh_token (id)
-            ON DELETE SET NULL ON UPDATE RESTRICT,
+            ON DELETE SET NULL ON UPDATE RESTRICT
+            DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT chk_refresh_token_expiry CHECK (expires_at > issued_at)
 );
 

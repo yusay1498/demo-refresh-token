@@ -263,7 +263,8 @@ CREATE TABLE IF NOT EXISTS refresh_token (
       ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT fk_refresh_token_replacement
     FOREIGN KEY (replaced_by_id) REFERENCES refresh_token (id)
-      ON DELETE SET NULL ON UPDATE RESTRICT,
+      ON DELETE SET NULL ON UPDATE RESTRICT
+      DEFERRABLE INITIALLY DEFERRED,
   CONSTRAINT chk_refresh_token_expiry CHECK (expires_at > issued_at)
 );
 
@@ -289,6 +290,8 @@ COMMENT ON COLUMN refresh_token.replaced_by_id IS 'Record ID of the token issued
 ```
 
 `username` はfamily親に保持し、token履歴側には重複保持しない。`ON DELETE CASCADE` はfamilyをcleanupする際にtoken履歴も削除するためのものとし、通常のlogoutやreuse検知では物理削除せず失効状態を記録する。期限切れfamilyのcleanupは再利用検知・監査に必要な保持期間を経過した後に行う。
+
+rotationでは、同一transaction内で旧tokenを先に消費済みに更新し、その後に旧tokenを参照する後継tokenを挿入する。自己参照FK `fk_refresh_token_replacement` はtransaction終了時に検査されるため、この順序を保ったまま参照整合性を確認できる。
 
 ### 6.3 Family単位の排他性
 

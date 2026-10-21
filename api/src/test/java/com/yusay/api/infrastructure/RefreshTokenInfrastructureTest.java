@@ -154,6 +154,51 @@ class RefreshTokenInfrastructureTest {
     }
 
     @Test
+    @Sql(statements = {
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-10-21T00:10:00Z', '2026-10-21T08:10:00Z');
+            """
+    })
+    void givenCurrentToken_whenRotated_thenDeferredReplacementForeignKeyIsSatisfied() {
+        RefreshToken consumedToken = new RefreshToken(
+            TOKEN_ID_1,
+            FAMILY_ID_1,
+            new RefreshTokenHash(HASH_1),
+            TOKEN_ISSUED_AT,
+            TOKEN_EXPIRES_AT,
+            REVOKED_AT,
+            null,
+            TOKEN_ID_2
+        );
+        RefreshToken replacementToken = new RefreshToken(
+            TOKEN_ID_2,
+            FAMILY_ID_1,
+            new RefreshTokenHash(HASH_2),
+            REVOKED_AT,
+            FAMILY_EXPIRES_AT,
+            null,
+            null,
+            null
+        );
+
+        tokenRepository.save(consumedToken);
+        tokenRepository.save(replacementToken);
+        jdbcClient.sql("SET CONSTRAINTS fk_refresh_token_replacement IMMEDIATE").update();
+
+        assertThat(tokenRepository.findById(TOKEN_ID_1)).contains(consumedToken);
+        assertThat(tokenRepository.findById(TOKEN_ID_2)).contains(replacementToken);
+        assertThat(familyRepository.findById(FAMILY_ID_1))
+            .get()
+            .extracting(RefreshTokenFamily::currentToken)
+            .isEqualTo(replacementToken);
+    }
+
+    @Test
     void givenNewFamilyAndToken_whenSaved_thenBothArePersistedAndMapped() {
         RefreshToken token = new RefreshToken(
             TOKEN_ID_1,
