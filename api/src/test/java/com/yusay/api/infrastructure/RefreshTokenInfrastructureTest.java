@@ -35,11 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RefreshTokenInfrastructureTest {
     private static final String FAMILY_ID_1 = "00000000-0000-0000-0000-000000000001";
     private static final String FAMILY_ID_2 = "00000000-0000-0000-0000-000000000002";
-    private static final String FAMILY_ID_3 = "00000000-0000-0000-0000-000000000003";
     private static final String TOKEN_ID_1 = "10000000-0000-0000-0000-000000000001";
     private static final String TOKEN_ID_2 = "10000000-0000-0000-0000-000000000002";
     private static final String TOKEN_ID_3 = "10000000-0000-0000-0000-000000000003";
-    private static final String TOKEN_ID_4 = "10000000-0000-0000-0000-000000000004";
     private static final String HASH_1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String HASH_2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final String HASH_3 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
