@@ -1,7 +1,7 @@
 package com.yusay.api.application;
 
 import com.yusay.api.config.JwtProperties;
-import com.yusay.api.domain.UserInfo;
+import com.yusay.api.domain.entity.UserInfo;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.*;

@@ -1,7 +1,7 @@
 package com.yusay.api.presentation;
 
 import com.yusay.api.application.AuthApplicationService;
-import com.yusay.api.domain.UserInfo;
+import com.yusay.api.domain.entity.UserInfo;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
