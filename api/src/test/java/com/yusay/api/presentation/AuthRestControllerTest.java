@@ -15,6 +15,7 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -104,9 +105,7 @@ class AuthRestControllerTest {
 
     @Test
     void givenTransactionCannotBeCreated_whenRefresh_thenReturnsServiceUnavailable() throws Exception {
-        doReturn(new AuthApplicationService.RefreshRejected())
-            .when(authApplicationService).refresh("refresh-token");
-        org.mockito.Mockito.doThrow(new CannotCreateTransactionException("database unavailable"))
+        doThrow(new CannotCreateTransactionException("database unavailable"))
             .when(authApplicationService).refresh("refresh-token");
 
         mockMvc.perform(post("/auth/refresh")
@@ -119,7 +118,7 @@ class AuthRestControllerTest {
 
     @Test
     void givenDatabaseConnectionFailure_whenRefresh_thenReturnsServiceUnavailable() throws Exception {
-        org.mockito.Mockito.doThrow(new DataAccessResourceFailureException("database unavailable"))
+        doThrow(new DataAccessResourceFailureException("database unavailable"))
             .when(authApplicationService).refresh("refresh-token");
 
         mockMvc.perform(post("/auth/refresh")
