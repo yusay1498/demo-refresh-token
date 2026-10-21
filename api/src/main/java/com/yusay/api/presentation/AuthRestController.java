@@ -5,11 +5,13 @@ import com.yusay.api.application.exception.UserAuthoritiesUnavailableException;
 import com.yusay.api.domain.entity.UserInfo;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -80,6 +82,14 @@ public class AuthRestController {
     public ResponseEntity<Void> onAuthoritiesUnavailable(
         UserAuthoritiesUnavailableException exception
     ) {
+        return ResponseEntity.status(503).build();
+    }
+
+    @ExceptionHandler({
+        CannotCreateTransactionException.class,
+        DataAccessResourceFailureException.class
+    })
+    public ResponseEntity<Void> onDatabaseUnavailable(RuntimeException exception) {
         return ResponseEntity.status(503).build();
     }
 

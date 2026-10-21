@@ -5,9 +5,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 import java.util.List;
 
@@ -98,5 +100,33 @@ class AuthRestControllerTest {
             .andExpect(status().isNoContent());
 
         verify(authApplicationService).signOut("refresh-token");
+    }
+
+    @Test
+    void givenTransactionCannotBeCreated_whenRefresh_thenReturnsServiceUnavailable() throws Exception {
+        doReturn(new AuthApplicationService.RefreshRejected())
+            .when(authApplicationService).refresh("refresh-token");
+        org.mockito.Mockito.doThrow(new CannotCreateTransactionException("database unavailable"))
+            .when(authApplicationService).refresh("refresh-token");
+
+        mockMvc.perform(post("/auth/refresh")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"refreshToken":"refresh-token"}
+                    """))
+            .andExpect(status().isServiceUnavailable());
+    }
+
+    @Test
+    void givenDatabaseConnectionFailure_whenRefresh_thenReturnsServiceUnavailable() throws Exception {
+        org.mockito.Mockito.doThrow(new DataAccessResourceFailureException("database unavailable"))
+            .when(authApplicationService).refresh("refresh-token");
+
+        mockMvc.perform(post("/auth/refresh")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {"refreshToken":"refresh-token"}
+                    """))
+            .andExpect(status().isServiceUnavailable());
     }
 }
