@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS refresh_token (
             ON DELETE CASCADE ON UPDATE RESTRICT,
     CONSTRAINT fk_refresh_token_replacement
         FOREIGN KEY (replaced_by_id) REFERENCES refresh_token (id)
-            ON DELETE SET NULL ON UPDATE RESTRICT,
+            ON DELETE SET NULL ON UPDATE RESTRICT
+            DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT chk_refresh_token_expiry CHECK (expires_at > issued_at)
 );
 
@@ -45,6 +46,10 @@ CREATE INDEX IF NOT EXISTS idx_refresh_token_family_id
 
 CREATE INDEX IF NOT EXISTS idx_refresh_token_replaced_by_id
     ON refresh_token (replaced_by_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_refresh_token_current_per_family
+    ON refresh_token (family_id)
+    WHERE consumed_at IS NULL;
 
 COMMENT ON TABLE refresh_token IS 'Hashed refresh token history for rotation and reuse detection';
 COMMENT ON COLUMN refresh_token.id IS 'UUID identifying this refresh token record';

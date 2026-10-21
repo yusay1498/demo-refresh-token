@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.Optional;
 
 public interface RefreshTokenFamilyRepository {
-    Optional<RefreshTokenFamily> findByIdForUpdate(String id);
+    Optional<RefreshTokenFamily> findById(String id);
 
-    List<RefreshTokenFamily> findAllByUsernameForUpdate(String username);
+    List<RefreshTokenFamily> findAllByUsername(String username);
 
     RefreshTokenFamily save(RefreshTokenFamily family);
 }

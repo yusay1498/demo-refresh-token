@@ -6,7 +6,7 @@ import com.yusay.api.domain.entity.vo.RefreshTokenHash;
 import java.util.Optional;
 
 public interface RefreshTokenRepository {
-    Optional<RefreshToken> findByTokenHash(RefreshTokenHash tokenHash);
+    Optional<RefreshToken> findByHash(RefreshTokenHash tokenHash);
 
     Optional<RefreshToken> findById(String id);
 
