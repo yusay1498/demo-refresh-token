@@ -187,11 +187,13 @@ Familyの有効状態は、`revokedAt` が未設定で、現在時刻が絶対�
 
 - Signin use caseはLDAP資格情報の認証とauthorities取得を行い、Refresh tokenの生成・ハッシュ化、Familyの作成、Access JWT発行を調整する。
 - `RefreshTokenFamilyRepository` はfamily集約の取得・保存を担当し、`RefreshTokenRepository` はRefreshToken履歴の検索・保存を担当する。各Repositoryは集約/Entityの永続化操作を提供し、signin/rotation/revocation等の業務手順をRepositoryメソッド名に埋め込まない。
-- Refresh use caseはApplication層で `@Transactional` を開始し、token hashで履歴を検索し、対応するfamilyを更新用に取得した後、token履歴を再読込する。family rootをロックしてから再読込することで、先行transactionのrotation/revoke結果を判定する。LDAPからauthoritiesを取得し、集約の状態遷移、各Repositoryへの保存、Access JWT発行を調整する。
+- `RefreshTokenLock` はApplication portとしてfamily単位・username単位の排他制御を表し、`PostgresRefreshTokenLock` がPostgreSQLのrow lockとtransaction-scoped advisory lockで実装する。lock呼び出しはApplication transaction内に限る。
+- Refresh use caseはApplication層で `@Transactional` を開始し、token hashで履歴を検索し、`RefreshTokenLock` を介してfamily rootをロックしてからtoken履歴とfamilyを再読込する。これにより、先行transactionのrotation/revoke結果を判定する。LDAPからauthoritiesを取得し、集約の状態遷移、各Repositoryへの保存、Access JWT発行を調整する。
 - 単一logoutもApplication層がtoken検索、family取得、family失効、保存を調整する。logout-allはusernameに属するfamilyを更新用に取得して順に失効・保存する。
-- Repository interfaceはDomain側に置き、Spring/JDBC/SQLに依存させない。`findByIdForUpdate` と `findAllByUsernameForUpdate` は集約の並行更新を保証するRepository契約であり、`SELECT ... FOR UPDATE`、行ロック順、ユーザー単位guard row/advisory lockの具体方式はInfrastructure実装に閉じ込める。
+- Repository interfaceはDomain側に置き、Spring/JDBC/SQLに依存させない。Repositoryは通常の検索・保存契約とし、ロック操作はApplication port `RefreshTokenLock` に分離する。
+- `JdbcRefreshTokenFamilyRepository` と `JdbcRefreshTokenRepository` はDomain Repositoryを実装し、SQLはInfrastructure DAOの `JdbcClient` に閉じ込める。Familyのcurrent tokenは `consumed_at IS NULL` のtokenとして取得し、部分unique indexでfamilyごとに一件であることをDBにも保証する。
 - トランザクション境界はApplication use caseが所有する。rotation時は消費済みtokenの保存と新しいfamily/current tokenの保存を同じtransactionで行い、reuse検知時はfamily失効を保存してcommitした後にAPIで401へ変換する。レスポンスのtokenを返すのもcommit成功後とする。
-- signinの新規family作成とlogout-allは、Infrastructure実装で同一username guardを共有する。新規family保存はguard取得中に行い、logout-allはguard取得後に対象familyをID順でロックする。これにより並行Signinがlogout-all対象から漏れないようにする。guardの実現方法とデッドロック回避はInfrastructure設計で確定する。
+- PostgreSQL実装は `RefreshTokenLock.lockFamily` に `SELECT ... FOR UPDATE` を、`lockUsername` にtransaction-scoped advisory lockを使う。Signinはfamily作成前にusername lockを取得し、logout-allは同じlock取得後にfamily一覧を読み、ID順にfamily lockを取ってから再読込する。これにより並行Signinがlogout-all対象から漏れないようにする。
 
 #### `refresh_token_family`（family親レコード）
 
@@ -216,7 +218,7 @@ Familyの有効状態は、`revokedAt` が未設定で、現在時刻が絶対�
 | `revoked_at` | `TIMESTAMPTZ` | token単体の失効時刻。未失効ならNULL |
 | `replaced_by_id` | `VARCHAR(36)` | rotation後のtoken record ID。未更新ならNULL |
 
-必要なindexはtoken hashのunique index、tokenの `family_id` と自己参照FK列 `replaced_by_id`、familyの `username` と `absolute_expires_at`。`replaced_by_id` のindexは、自己参照FKの `ON DELETE SET NULL` が参照元recordを検索する際の全件走査を避けるために設ける。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
+必要なindexはtoken hashのunique index、tokenの `family_id` と自己参照FK列 `replaced_by_id`、familyの `username` と `absolute_expires_at`。また、`consumed_at IS NULL` のtokenはfamilyごとに1件だけとするpartial unique indexを設け、current tokenの一意性をDBでも保証する。`replaced_by_id` のindexは、自己参照FKの `ON DELETE SET NULL` が参照元recordを検索する際の全件走査を避けるために設ける。有効状態は親familyとtokenの双方が未失効で、未消費かつ期限内であることにより判定する。消費済みrecordは再利用検知に必要な期間保持する。
 
 ### 6.2 PostgreSQL DDL
 
@@ -270,6 +272,10 @@ CREATE INDEX IF NOT EXISTS idx_refresh_token_family_id
 
 CREATE INDEX IF NOT EXISTS idx_refresh_token_replaced_by_id
   ON refresh_token (replaced_by_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_refresh_token_current_per_family
+  ON refresh_token (family_id)
+  WHERE consumed_at IS NULL;
 
 COMMENT ON TABLE refresh_token IS 'Hashed refresh token history for rotation and reuse detection';
 COMMENT ON COLUMN refresh_token.id IS 'UUID identifying this refresh token record';
