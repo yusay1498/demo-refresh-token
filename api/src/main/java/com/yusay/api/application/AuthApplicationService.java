@@ -213,11 +213,6 @@ public class AuthApplicationService {
         }
     }
 
-    @PreAuthorize("permitAll()")
-    public String issueToken(String username, List<String> authorities) {
-        return createAccessToken(username, authorities, clock.instant());
-    }
-
     @PreAuthorize("isAuthenticated()")
     public UserInfo userInfo(Jwt jwt) {
         return new UserInfo(jwt.getSubject(), jwt.getClaimAsStringList("authorities"));
