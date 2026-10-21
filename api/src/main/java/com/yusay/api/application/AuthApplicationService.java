@@ -11,6 +11,7 @@ import com.yusay.api.domain.entity.vo.RefreshTokenHash;
 import com.yusay.api.domain.repository.RefreshTokenFamilyRepository;
 import com.yusay.api.domain.repository.RefreshTokenRepository;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -190,14 +191,22 @@ public class AuthApplicationService {
 
     @Transactional
     @PreAuthorize("isAuthenticated()")
-    public void signOutAll(String username) {
+    public void signOutAll(String username, Authentication authentication) {
+        if (authentication == null || !username.equals(authentication.getName())) {
+            throw new AccessDeniedException("Cannot sign out sessions for another user");
+        }
+
         refreshTokenLock.lockUsername(username);
-        List<RefreshTokenFamily> families = familyRepository.findAllByUsername(username);
+        List<RefreshTokenFamily> families = familyRepository.findAllActiveByUsername(username, now());
 
         for (RefreshTokenFamily familySnapshot : families) {
             refreshTokenLock.lockFamily(familySnapshot.id());
             familyRepository.findById(familySnapshot.id()).ifPresent(family -> {
-                RefreshTokenFamily revokedFamily = family.revoke(now());
+                OffsetDateTime currentTime = now();
+                if (!family.isActiveAt(currentTime)) {
+                    return;
+                }
+                RefreshTokenFamily revokedFamily = family.revoke(currentTime);
                 familyRepository.save(revokedFamily);
                 tokenRepository.save(revokedFamily.currentToken());
             });

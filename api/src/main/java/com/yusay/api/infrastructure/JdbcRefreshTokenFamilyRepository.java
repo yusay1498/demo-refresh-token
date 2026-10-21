@@ -5,6 +5,7 @@ import com.yusay.api.domain.repository.RefreshTokenFamilyRepository;
 import com.yusay.api.infrastructure.dao.RefreshTokenFamilyDao;
 import org.springframework.stereotype.Repository;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +25,11 @@ public class JdbcRefreshTokenFamilyRepository implements RefreshTokenFamilyRepos
     @Override
     public List<RefreshTokenFamily> findAllByUsername(String username) {
         return familyDao.selectByUsername(username);
+    }
+
+    @Override
+    public List<RefreshTokenFamily> findAllActiveByUsername(String username, OffsetDateTime now) {
+        return familyDao.selectActiveByUsername(username, now);
     }
 
     @Override

@@ -18,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
@@ -224,6 +226,52 @@ class AuthApplicationServiceTest {
         ));
         verify(userAuthoritiesProvider, never()).findAuthorities(anyString());
         verify(jwtEncoder, never()).encode(any(JwtEncoderParameters.class));
+    }
+
+    @Test
+    void givenDifferentAuthenticatedUser_whenSignOutAll_thenRejectsBeforeLocking() {
+        Authentication authentication = new TestingAuthenticationToken("squall", "", "ROLE_USER");
+
+        assertThatThrownBy(() -> authApplicationService.signOutAll("cid", authentication))
+            .isInstanceOf(AccessDeniedException.class);
+
+        verify(refreshTokenLock, never()).lockUsername(anyString());
+        verify(familyRepository, never()).findAllActiveByUsername("cid", NOW);
+    }
+
+    @Test
+    void givenFamilyRevokedBeforeItsLockIsAcquired_whenSignOutAll_thenDoesNotSaveItAgain() {
+        Authentication authentication = new TestingAuthenticationToken("cid", "", "ROLE_USER");
+        RefreshToken activeToken = new RefreshToken(
+            CURRENT_TOKEN_ID,
+            FAMILY_ID,
+            hash("active-refresh-token"),
+            NOW.minusHours(1),
+            NOW.plusHours(7),
+            null,
+            null,
+            null
+        );
+        RefreshTokenFamily activeSnapshot = new RefreshTokenFamily(
+            FAMILY_ID,
+            "cid",
+            NOW.minusHours(1),
+            NOW.plusHours(20),
+            null,
+            activeToken
+        );
+        RefreshToken revokedToken = activeToken.revoke(NOW.minusMinutes(1));
+        RefreshTokenFamily revokedFamily = activeSnapshot.revoke(NOW.minusMinutes(1));
+        doReturn(List.of(activeSnapshot)).when(familyRepository)
+            .findAllActiveByUsername("cid", NOW);
+        doReturn(Optional.of(revokedFamily)).when(familyRepository).findById(FAMILY_ID);
+
+        authApplicationService.signOutAll("cid", authentication);
+
+        verify(refreshTokenLock).lockUsername("cid");
+        verify(refreshTokenLock).lockFamily(FAMILY_ID);
+        verify(familyRepository, never()).save(revokedFamily);
+        verify(tokenRepository, never()).save(revokedToken);
     }
 
     private static RefreshTokenHash hash(String rawToken) {

@@ -35,9 +35,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RefreshTokenInfrastructureTest {
     private static final String FAMILY_ID_1 = "00000000-0000-0000-0000-000000000001";
     private static final String FAMILY_ID_2 = "00000000-0000-0000-0000-000000000002";
+    private static final String FAMILY_ID_3 = "00000000-0000-0000-0000-000000000003";
     private static final String TOKEN_ID_1 = "10000000-0000-0000-0000-000000000001";
     private static final String TOKEN_ID_2 = "10000000-0000-0000-0000-000000000002";
     private static final String TOKEN_ID_3 = "10000000-0000-0000-0000-000000000003";
+    private static final String TOKEN_ID_4 = "10000000-0000-0000-0000-000000000004";
     private static final String HASH_1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String HASH_2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final String HASH_3 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
@@ -151,6 +153,42 @@ class RefreshTokenInfrastructureTest {
             new RefreshTokenFamily(FAMILY_ID_1, "cid", CREATED_AT, FAMILY_EXPIRES_AT, null, expectedCurrentToken1),
             new RefreshTokenFamily(FAMILY_ID_2, "cid", CREATED_AT, FAMILY_EXPIRES_AT, REVOKED_AT, expectedCurrentToken2)
         );
+    }
+
+    @Test
+    @Sql(statements = {
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at)
+            VALUES ('00000000-0000-0000-0000-000000000001', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at, revoked_at)
+            VALUES ('00000000-0000-0000-0000-000000000002', 'cid', '2026-10-21T00:00:00Z', '2026-10-22T00:00:00Z', '2026-10-21T11:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token_family (id, username, created_at, absolute_expires_at)
+            VALUES ('00000000-0000-0000-0000-000000000003', 'cid', '2026-10-21T00:00:00Z', '2026-10-21T11:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000002', 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """,
+        """
+            INSERT INTO refresh_token (id, family_id, token_hash, issued_at, expires_at)
+            VALUES ('10000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000003', 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', '2026-10-21T10:00:00Z', '2026-10-21T18:00:00Z');
+            """
+    })
+    void givenActiveRevokedAndExpiredFamilies_whenFindAllActiveByUsername_thenReturnsOnlyActiveFamily() {
+        List<RefreshTokenFamily> result = familyRepository.findAllActiveByUsername(
+            "cid",
+            OffsetDateTime.parse("2026-10-21T12:00:00Z")
+        );
+
+        assertThat(result).extracting(RefreshTokenFamily::id).containsExactly(FAMILY_ID_1);
     }
 
     @Test

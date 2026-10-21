@@ -75,6 +75,37 @@ public class RefreshTokenFamilyDao {
             .list();
     }
 
+    public List<RefreshTokenFamily> selectActiveByUsername(String username, OffsetDateTime now) {
+        return jdbcClient.sql("""
+                SELECT
+                    family.id AS family_id,
+                    family.username,
+                    family.created_at,
+                    family.absolute_expires_at,
+                    family.revoked_at,
+                    token.id AS token_id,
+                    token.family_id AS token_family_id,
+                    token.token_hash,
+                    token.issued_at,
+                    token.expires_at,
+                    token.consumed_at,
+                    token.revoked_at AS token_revoked_at,
+                    token.replaced_by_id
+                FROM refresh_token_family AS family
+                INNER JOIN refresh_token AS token
+                    ON token.family_id = family.id
+                    AND token.consumed_at IS NULL
+                WHERE family.username = :username
+                  AND family.revoked_at IS NULL
+                  AND family.absolute_expires_at > :now
+                ORDER BY family.id
+                """)
+            .param("username", username)
+            .param("now", now)
+            .query(this::mapFamily)
+            .list();
+    }
+
     public void insert(RefreshTokenFamily family) {
         jdbcClient.sql("""
                 INSERT INTO refresh_token_family (
