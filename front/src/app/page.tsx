@@ -19,6 +19,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const authenticated = authState === "authenticated";
+  const showSession = session !== null && (authenticated || authState === "unavailable");
 
   async function handleSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,14 +77,16 @@ export default function Home() {
 
       <div className="content-grid">
         <section className="auth-panel" aria-labelledby="auth-title">
-          <div className="panel-heading"><div><p className="eyebrow">01 / SIGN IN</p><h2 id="auth-title">{authenticated ? "セッション" : "アカウント"}</h2></div><span className="panel-index">AUTH</span></div>
-          {authenticated && userInfo ? (
+          <div className="panel-heading"><div><p className="eyebrow">01 / SIGN IN</p><h2 id="auth-title">{showSession ? "セッション" : "アカウント"}</h2></div><span className="panel-index">AUTH</span></div>
+          {showSession ? (
             <div className="identity-view">
+              {authenticated && userInfo && <>
               <div className="identity-avatar">{userInfo.username.slice(0, 1).toUpperCase()}</div>
               <div className="identity-copy"><span>ログイン中のユーザー</span><strong>{userInfo.username}</strong></div>
               <div className="identity-rule" />
               <div className="authority-heading"><span>AUTHORITY</span><span>{userInfo.authorities.length.toString().padStart(2, "0")}</span></div>
               <div className="authority-list">{userInfo.authorities.length ? userInfo.authorities.map((authority) => <span className="authority-tag" key={authority}>{authority}</span>) : <span className="muted">権限情報なし</span>}</div>
+              </>}
               <div className="token-note"><span className="token-note-mark">↻</span><span>Access token <strong>{Math.floor((session?.expiresIn ?? 0) / 60)} min</strong><br />期限切れ時はrefresh tokenで更新</span></div>
               <div className="session-actions">
                 <button className="button button-primary" onClick={() => void handleProtectedCheck()} disabled={busy}>認証APIを再確認 <span>↗</span></button>

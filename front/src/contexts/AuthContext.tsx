@@ -65,18 +65,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else window.sessionStorage.removeItem(SESSION_KEY);
   }
 
+  async function refreshSession(currentSession: AuthSession) {
+    const response = await checkedResponse(await fetch(`${API_BASE_URI}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refreshToken: currentSession.refreshToken }),
+    }));
+    const refreshedSession = (await response.json()) as AuthSession;
+    storeSession(refreshedSession);
+    return refreshedSession;
+  }
+
   async function verifySession(currentSession: AuthSession) {
     let activeSession = currentSession;
     let response = await readUserInfo(activeSession.token);
     if (response.status === 401) {
-      const refreshResponse = await fetch(`${API_BASE_URI}/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: activeSession.refreshToken }),
-      });
-      await checkedResponse(refreshResponse);
-      activeSession = (await refreshResponse.json()) as AuthSession;
-      storeSession(activeSession);
+      activeSession = await refreshSession(activeSession);
       response = await readUserInfo(activeSession.token);
     }
     await checkedResponse(response);
@@ -88,7 +92,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function checkPublicEndpoint() {
     const response = await checkedResponse(await fetch(`${API_BASE_URI}/auth/anon`));
     setPublicResult(await response.text());
-    if (!session) setAuthState("anonymous");
   }
 
   async function signIn(username: string, password: string) {
@@ -135,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!session) return;
     setBusy(true);
     try {
-      const response = revokeAll
+      let response = revokeAll
         ? await fetch(`${API_BASE_URI}/auth/signOutAll`, {
             method: "POST",
             headers: { Authorization: `Bearer ${session.token}` },
@@ -145,6 +148,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refreshToken: session.refreshToken }),
           });
+      if (revokeAll && response.status === 401) {
+        const refreshedSession = await refreshSession(session);
+        response = await fetch(`${API_BASE_URI}/auth/signOutAll`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${refreshedSession.token}` },
+        });
+      }
       await checkedResponse(response);
       storeSession(null);
       setUserInfo(null);
@@ -165,26 +175,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const response = await checkedResponse(await fetch(`${API_BASE_URI}/auth/anon`));
           const result = await response.text();
           setPublicResult(result);
-          setAuthState("anonymous");
+          setAuthState(current => current === "checking" ? "anonymous" : current);
         } catch {
-          setAuthState("unavailable");
+          setAuthState(current => current === "checking" ? "unavailable" : current);
         }
         return;
       }
 
+      let savedSession: AuthSession;
       try {
-        const savedSession = JSON.parse(saved) as AuthSession;
-        if (!savedSession.token || !savedSession.refreshToken) throw new Error("Invalid session");
-        setSession(savedSession);
-        await verifySession(savedSession);
-      } catch (error) {
-        if (error instanceof ApiError && error.status !== 401) {
-          setAuthState("unavailable");
-          return;
+        const parsed: unknown = JSON.parse(saved);
+        if (typeof parsed !== "object" || parsed === null
+          || !("token" in parsed) || typeof parsed.token !== "string" || !parsed.token
+          || !("refreshToken" in parsed) || typeof parsed.refreshToken !== "string" || !parsed.refreshToken
+          || !("username" in parsed) || typeof parsed.username !== "string"
+          || !("authorities" in parsed) || !Array.isArray(parsed.authorities)
+          || !parsed.authorities.every(authority => typeof authority === "string")
+          || !("tokenType" in parsed) || typeof parsed.tokenType !== "string"
+          || !("expiresIn" in parsed) || typeof parsed.expiresIn !== "number") {
+          throw new Error("Invalid session");
         }
+        savedSession = parsed as AuthSession;
+      } catch {
         storeSession(null);
         setUserInfo(null);
         setAuthState("anonymous");
+        return;
+      }
+
+      setSession(savedSession);
+      try {
+        await verifySession(savedSession);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          storeSession(null);
+          setUserInfo(null);
+          setAuthState("anonymous");
+        } else {
+          setAuthState("unavailable");
+        }
       }
     }
 
