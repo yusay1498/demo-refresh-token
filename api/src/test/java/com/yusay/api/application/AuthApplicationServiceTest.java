@@ -1,6 +1,9 @@
 package com.yusay.api.application;
 
 import com.yusay.api.application.port.RefreshTokenLock;
+import com.yusay.api.application.event.AuthAuditEvent;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.authentication.BadCredentialsException;
 import com.yusay.api.application.port.UserAuthoritiesProvider;
 import com.yusay.api.config.JwtProperties;
 import com.yusay.api.config.RefreshTokenProperties;
@@ -76,6 +79,9 @@ class AuthApplicationServiceTest {
     @Mock
     Jwt jwt;
 
+    @Mock
+    ApplicationEventPublisher eventPublisher;
+
     private AuthApplicationService authApplicationService;
 
     @BeforeEach
@@ -94,9 +100,24 @@ class AuthApplicationServiceTest {
             refreshTokenLock,
             userAuthoritiesProvider,
             Clock.fixed(FIXED_INSTANT, ZoneOffset.UTC),
-            new SecureRandom()
+            new SecureRandom(),
+            eventPublisher
         );
 
+    }
+
+    @Test
+    void givenInvalidCredentials_whenSignIn_thenPublishesRejectionWithoutCredentials() {
+        org.mockito.Mockito.doThrow(new BadCredentialsException("credentials rejected"))
+            .when(authenticationManager).authenticate(any(Authentication.class));
+
+        assertThatThrownBy(() -> authApplicationService.signIn("cid", "secret-password"))
+            .isInstanceOf(BadCredentialsException.class);
+
+        verify(eventPublisher).publishEvent(new AuthAuditEvent(
+            "sign_in_failed", "rejected", "credentials_rejected", "", "none", AuthAuditEvent.Timing.IMMEDIATE
+        ));
+        verify(familyRepository, never()).save(any());
     }
 
     @Test
@@ -116,6 +137,9 @@ class AuthApplicationServiceTest {
 
         RefreshTokenFamily savedFamily = familyCaptor.getValue();
         RefreshToken savedToken = tokenCaptor.getValue();
+        verify(eventPublisher).publishEvent(new AuthAuditEvent(
+            "sign_in_succeeded", "success", "authenticated", savedFamily.id(), "none", AuthAuditEvent.Timing.AFTER_COMMIT
+        ));
         assertThat(result.token()).isEqualTo("access-token");
         assertThat(result.username()).isEqualTo("cid");
         assertThat(result.authorities()).containsExactly("ROLE_USER");
@@ -218,6 +242,14 @@ class AuthApplicationServiceTest {
             authApplicationService.refresh("previous-refresh-token");
 
         assertThat(result).isInstanceOf(AuthApplicationService.RefreshTokenReuseDetected.class);
+        verify(eventPublisher).publishEvent(new AuthAuditEvent(
+            "refresh_token_reuse_detected", "detected", "consumed_token_presented",
+            FAMILY_ID, "family", AuthAuditEvent.Timing.IMMEDIATE
+        ));
+        verify(eventPublisher).publishEvent(new AuthAuditEvent(
+            "reuse_revocation_completed", "", "token_reuse",
+            FAMILY_ID, "family", AuthAuditEvent.Timing.AFTER_REUSE_REVOCATION
+        ));
         verify(familyRepository).save(org.mockito.ArgumentMatchers.argThat(
             revokedFamily -> revokedFamily.revokedAt().equals(NOW)
         ));
