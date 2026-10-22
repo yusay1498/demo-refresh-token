@@ -32,7 +32,7 @@ public class RefreshTokenLockDao {
                 if (!resultSet.next()) {
                     throw new IllegalStateException("Username lock query returned no row");
                 }
-                return null;
+                return Boolean.TRUE;
             });
     }
 }
