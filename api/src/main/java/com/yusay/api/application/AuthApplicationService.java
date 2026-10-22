@@ -1,6 +1,10 @@
 package com.yusay.api.application;
 
 import com.yusay.api.application.port.RefreshTokenLock;
+import com.yusay.api.application.event.AuthAuditEvent;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.AccountStatusException;
 import com.yusay.api.application.port.UserAuthoritiesProvider;
 import com.yusay.api.config.JwtProperties;
 import com.yusay.api.config.RefreshTokenProperties;
@@ -50,6 +54,7 @@ public class AuthApplicationService {
     private final UserAuthoritiesProvider userAuthoritiesProvider;
     private final Clock clock;
     private final RandomGenerator randomGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AuthApplicationService(
         AuthenticationManager authenticationManager,
@@ -61,7 +66,8 @@ public class AuthApplicationService {
         RefreshTokenLock refreshTokenLock,
         UserAuthoritiesProvider userAuthoritiesProvider,
         Clock clock,
-        RandomGenerator randomGenerator
+        RandomGenerator randomGenerator,
+        ApplicationEventPublisher eventPublisher
     ) {
         this.authenticationManager = authenticationManager;
         this.jwtEncoder = jwtEncoder;
@@ -73,14 +79,23 @@ public class AuthApplicationService {
         this.userAuthoritiesProvider = userAuthoritiesProvider;
         this.clock = clock;
         this.randomGenerator = randomGenerator;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
     @PreAuthorize("permitAll()")
     public TokenSet signIn(String username, String password) {
-        Authentication authentication = authenticationManager.authenticate(
-            new UsernamePasswordAuthenticationToken(username, password)
-        );
+        Authentication authentication;
+        try {
+            authentication = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(username, password)
+            );
+        } catch (BadCredentialsException | AccountStatusException exception) {
+            eventPublisher.publishEvent(new AuthAuditEvent(
+                "sign_in_failed", "rejected", "credentials_rejected", "", "none", AuthAuditEvent.Timing.IMMEDIATE
+            ));
+            throw exception;
+        }
         String authenticatedUsername = authentication.getName();
         List<String> authorities = authentication.getAuthorities().stream()
             .map(GrantedAuthority::getAuthority)
@@ -102,7 +117,11 @@ public class AuthApplicationService {
         familyRepository.save(family);
         tokenRepository.save(generated.token());
 
-        return createTokenSet(authenticatedUsername, authorities, generated.rawValue(), now.toInstant());
+        TokenSet tokens = createTokenSet(authenticatedUsername, authorities, generated.rawValue(), now.toInstant());
+        eventPublisher.publishEvent(new AuthAuditEvent(
+            "sign_in_succeeded", "success", "authenticated", familyId, "none", AuthAuditEvent.Timing.AFTER_COMMIT
+        ));
+        return tokens;
     }
 
     @Transactional
@@ -141,6 +160,14 @@ public class AuthApplicationService {
         );
 
         if (rotation instanceof RefreshTokenFamily.TokenReuseDetected(RefreshTokenFamily revokedFamily)) {
+            eventPublisher.publishEvent(new AuthAuditEvent(
+                "refresh_token_reuse_detected", "detected", "consumed_token_presented",
+                family.id(), "family", AuthAuditEvent.Timing.IMMEDIATE
+            ));
+            eventPublisher.publishEvent(new AuthAuditEvent(
+                "reuse_revocation_completed", "", "token_reuse",
+                family.id(), "family", AuthAuditEvent.Timing.AFTER_REUSE_REVOCATION
+            ));
             familyRepository.save(revokedFamily);
             tokenRepository.save(revokedFamily.currentToken());
             return new RefreshTokenReuseDetected();
@@ -187,6 +214,11 @@ public class AuthApplicationService {
         RefreshTokenFamily revokedFamily = family.revoke(now());
         familyRepository.save(revokedFamily);
         tokenRepository.save(revokedFamily.currentToken());
+        if (family.revokedAt() == null) {
+            eventPublisher.publishEvent(new AuthAuditEvent(
+                "session_revoked", "success", "sign_out", family.id(), "family", AuthAuditEvent.Timing.AFTER_COMMIT
+            ));
+        }
     }
 
     @Transactional
@@ -211,6 +243,9 @@ public class AuthApplicationService {
                 tokenRepository.save(revokedFamily.currentToken());
             });
         }
+        eventPublisher.publishEvent(new AuthAuditEvent(
+            "session_revoked", "success", "sign_out_all", "", "all_families", AuthAuditEvent.Timing.AFTER_COMMIT
+        ));
     }
 
     @PreAuthorize("isAuthenticated()")
