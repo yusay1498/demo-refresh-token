@@ -143,3 +143,33 @@ it("shows a failed signIn without granting access", async () => {
   expect(navigation.replace).not.toHaveBeenCalled();
   expect(window.sessionStorage.getItem(sessionKey)).toBeNull();
 });
+
+it("preserves the signIn form and error when verification fails after an initial connection failure", async () => {
+  fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  renderRoute(true);
+  const usernameInput = await screen.findByLabelText("ユーザー名");
+  const passwordInput = screen.getByLabelText("パスワード");
+  await screen.findByText("APIに接続できません。APIが起動中か確認してください。");
+
+  let resolveVerification!: (response: Response) => void;
+  fetchMock.mockResolvedValueOnce(Response.json(savedSession));
+  fetchMock.mockImplementationOnce(() => new Promise(resolve => { resolveVerification = resolve; }));
+  fireEvent.change(usernameInput, { target: { value: "demo-user" } });
+  fireEvent.change(passwordInput, { target: { value: "test-password" } });
+  fireEvent.click(screen.getByRole("button", { name: "サインイン" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+
+  expect(screen.getByLabelText("ユーザー名")).toBe(usernameInput);
+  expect(screen.getByLabelText("パスワード")).toBe(passwordInput);
+  expect(screen.getByRole("button", { name: "接続中..." })).toBeTruthy();
+  expect(screen.queryByText("接続を確認できません")).toBeNull();
+
+  await act(async () => resolveVerification(new Response(null, { status: 503 })));
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", "サインインできませんでした。アカウント情報とAPIの接続状態を確認してください。");
+  expect(screen.getByLabelText("ユーザー名")).toBe(usernameInput);
+  expect(usernameInput).toHaveProperty("value", "demo-user");
+  expect(passwordInput).toHaveProperty("value", "test-password");
+  expect(screen.getByRole("button", { name: "サインイン" })).toHaveProperty("disabled", false);
+  expect(navigation.replace).not.toHaveBeenCalled();
+  expect(window.sessionStorage.getItem(sessionKey)).toBeNull();
+});

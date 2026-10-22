@@ -16,7 +16,7 @@ export type UserInfo = {
   authorities: string[];
 };
 
-export type AuthState = "checking" | "anonymous" | "authenticated" | "unavailable";
+export type AuthState = "checking" | "signingIn" | "anonymous" | "authenticated" | "unavailable";
 
 type AuthContextValue = {
   authState: AuthState;
@@ -96,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signIn(username: string, password: string) {
     setBusy(true);
+    setAuthState("signingIn");
     try {
       const response = await checkedResponse(await fetch(`${API_BASE_URI}/auth/signIn`, {
         method: "POST",
