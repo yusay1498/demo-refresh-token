@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Home from "../app/page";
+import DemoPage from "../app/(auth)/demo/page";
 import { AuthProvider, type AuthSession, useAuth } from "./AuthContext";
 
 const sessionKey = "demo-refresh-token.auth";
@@ -28,7 +28,7 @@ function Probe() {
   </>;
 }
 
-function renderAuth(children = <Home />) {
+function renderAuth(children = <DemoPage />) {
   return render(<StrictMode><AuthProvider>{children}</AuthProvider></StrictMode>);
 }
 
@@ -59,6 +59,9 @@ describe("session recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: /認証APIを再確認/ }));
     await screen.findByText("AUTHENTICATED");
     expect(screen.getByText("demo-user")).toBeTruthy();
+    expect(screen.queryByLabelText("ユーザー名")).toBeNull();
+    expect(screen.queryByLabelText("パスワード")).toBeNull();
+    expect(screen.queryByRole("button", { name: /サインイン/ })).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
