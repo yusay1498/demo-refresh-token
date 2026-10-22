@@ -39,7 +39,10 @@ api/src/main/java/com/yusay/api/
 | `reuse_revocation_completed` | 再利用検知に伴うトランザクション完了時 | `success` / `failure` / `unknown` | 成功はINFO、それ以外はWARN |
 
 `sign_in_failed`は`BadCredentialsException`と`AccountStatusException`を対象とする。
-LDAP接続・DB障害を認証情報拒否として数えない。それらは既存APMの5xx・エラー率で別途監視する。
+LDAP接続・DB障害を認証情報拒否として数えない。ただし、基盤障害が必ず5xxになるわけではない。
+LDAP接続障害が`InternalAuthenticationServiceException`として通知された場合、現行の`AuthRestController`は親型の`AuthenticationException`を捕捉して401を返す。
+この例外は`sign_in_failed`の記録対象外でもあるため、HTTP 5xx監視と監査ログのログイン失敗件数だけでは検知できない。
+一方、Controllerで個別に扱うDB接続・トランザクション開始失敗や、権限取得の`UserAuthoritiesUnavailableException`は503となる。
 存在しないRefresh tokenでのサインアウトや、すでに失効したfamilyの再サインアウトでは、新たなfamily失効成功を記録しない。
 全セッション失効は処理完了を記録するため、対象familyが0件でも1件の`session_revoked`を出す。
 
@@ -108,6 +111,16 @@ WHERE `event.action` = 'sign_in_failed'
 全体の通常件数を測定して閾値を決める。単なる失敗増加を攻撃確定として扱わない。
 LDAP・DBなどの障害アラートとは通知先と対応手順を区別する。
 
+### LDAP接続障害の監視上の制約
+
+サインイン時の`InternalAuthenticationServiceException`は401で処理されるため、5xx件数からLDAP接続障害の有無を判断しない。
+また、401全体には通常の認証拒否も含まれるため、401の増加だけでLDAP障害と断定しない。
+
+New Relic Java Agentが、Controllerで処理済みの例外をAPMエラーとして収集し、通知できるかを検証環境で確認する。
+収集の可否はAgentの計装・エラー収集設定に依存するため、自動的に検知されるとは限らない。
+収集されない場合は、認証基盤障害専用の構造化ログや、明示的なAPMエラー通知など、別の検知経路を設計・実装する必要がある。
+現状ではその専用ログ・明示的な通知処理は未実装である。
+
 ## 通知後の対応
 
 1. 同じ`session.family_id`の検知ログと失効結果を確認する。
@@ -124,6 +137,7 @@ LDAP・DBなどの障害アラートとは通知先と対応手順を区別す�
 - ローカルでAgentを付けずに動かす場合も、監査属性を出すにはMDC出力の設定が必要。
 - 検証環境で再利用を発生させ、ECS経由でJSON属性が検索できることを確認する。
 - アラートの評価窓・集約・通知先をNew Relic上で設定し、実際にテスト通知を受ける。
+- 検証環境でLDAPへの接続を意図的に失敗させ、サインインのHTTPステータス、監査ログの記録対象、APMの例外収集と通知を確認する。401で処理されても別経路で障害通知が届くことを、本番導入前に確認する。
 - token・パスワードが含まれず、二重転送がないことを確認する。
 - 保存期間、ログ閲覧権限、転送失敗、非同期Appenderの破棄/キュー設定も確認する。
 
@@ -137,5 +151,6 @@ New Relic上のアラート作成やECS転送設定の変更は、このリポ�
 - [New Relic: Java Logs in Context](https://docs.newrelic.com/docs/logs/logs-context/java-configure-logs-context-all/)
 - [New Relic: NRQL Alert Conditions](https://docs.newrelic.com/docs/alerts/create-alert/create-alert-condition/create-nrql-alert-conditions/)
 - [Spring Framework: Application Events](https://docs.spring.io/spring-framework/reference/core/beans/context-introduction.html#context-functionality-events)
+- [Spring Security: InternalAuthenticationServiceException](https://docs.spring.io/spring-security/reference/api/java/org/springframework/security/authentication/InternalAuthenticationServiceException.html)
 - [OWASP: Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
 - [RFC 9700: Refresh Token Protection](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14)
