@@ -2,7 +2,7 @@ name: Java CI with Maven - API
 on:
   push:
     branches:
-      - "main"
+      - "**"
     paths:
      - "api/**"
      - ".github/workflows/api-ci.yml"
