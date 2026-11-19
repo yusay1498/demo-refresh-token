@@ -1,7 +1,6 @@
 package com.yusay.api.application;
 
 import com.yusay.api.application.port.RefreshTokenLock;
-import com.yusay.api.application.event.AuthAuditEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.BadCredentialsException;
 import com.yusay.api.application.port.UserAuthoritiesProvider;

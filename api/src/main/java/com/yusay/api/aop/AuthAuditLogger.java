@@ -1,6 +1,6 @@
 package com.yusay.api.aop;
 
-import com.yusay.api.application.event.AuthAuditEvent;
+import com.yusay.api.application.AuthAuditEvent;
 import org.springframework.context.event.EventListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

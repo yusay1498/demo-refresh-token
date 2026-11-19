@@ -1,6 +1,6 @@
 package com.yusay.api.aop;
 
-import com.yusay.api.application.event.AuthAuditEvent;
+import com.yusay.api.application.AuthAuditEvent;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;

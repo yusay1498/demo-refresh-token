@@ -1,4 +1,4 @@
-package com.yusay.api.application.event;
+package com.yusay.api.application;
 
 public record AuthAuditEvent(
     String action,
