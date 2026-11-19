@@ -3,9 +3,11 @@ package com.yusay.api.infrastructure;
 import com.yusay.api.application.exception.UserAuthoritiesUnavailableException;
 import com.yusay.api.application.port.UserAuthoritiesProvider;
 import com.yusay.api.config.LdapProperties;
+import org.springframework.ldap.NameNotFoundException;
 import org.springframework.ldap.NamingException;
 import org.springframework.ldap.core.DirContextOperations;
-import org.springframework.ldap.core.LdapOperations;
+import org.springframework.ldap.core.ContextMapper;
+import org.springframework.ldap.core.LdapClient;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.ldap.userdetails.LdapAuthoritiesPopulator;
 import org.springframework.stereotype.Component;
@@ -17,23 +19,28 @@ import java.util.Objects;
 @Component
 public class LdapUserAuthoritiesProvider implements UserAuthoritiesProvider {
     private final LdapProperties ldapProperties;
-    private final LdapOperations ldapOperations;
+    private final LdapClient ldapClient;
     private final LdapAuthoritiesPopulator authoritiesPopulator;
 
     public LdapUserAuthoritiesProvider(
         LdapProperties ldapProperties,
-        LdapOperations ldapOperations,
+        LdapClient ldapClient,
         LdapAuthoritiesPopulator authoritiesPopulator
     ) {
         this.ldapProperties = ldapProperties;
-        this.ldapOperations = ldapOperations;
+        this.ldapClient = ldapClient;
         this.authoritiesPopulator = authoritiesPopulator;
     }
 
     @Override
     public List<String> findAuthorities(String username) {
         try {
-            DirContextOperations userContext = ldapOperations.lookupContext(userDn(username));
+            ContextMapper<DirContextOperations> contextMapper = context -> (DirContextOperations) context;
+            DirContextOperations userContext = ldapClient.search()
+                .name(userDn(username))
+                .map(contextMapper)
+                .optional()
+                .orElseThrow(() -> new NameNotFoundException("LDAP user entry was not found"));
             return authoritiesPopulator.getGrantedAuthorities(userContext, username).stream()
                 .map(GrantedAuthority::getAuthority)
                 .filter(Objects::nonNull)

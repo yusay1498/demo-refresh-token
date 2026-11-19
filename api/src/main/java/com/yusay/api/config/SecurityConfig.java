@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.ldap.core.support.BaseLdapPathContextSource;
+import org.springframework.ldap.core.LdapClient;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -56,6 +57,11 @@ public class SecurityConfig {
         }
 
         return context;
+    }
+
+    @Bean
+    LdapClient ldapClient(BaseLdapPathContextSource contextSource) {
+        return LdapClient.create(contextSource);
     }
 
     @Bean
